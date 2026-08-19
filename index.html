@@ -129,7 +129,15 @@
         }
         .btn-action span.sub { font-size: 11px; opacity: 0.8; font-variant-numeric: tabular-nums; margin-top: 2px; }
         .btn-action:active:not(:disabled) { transform: scale(0.97); }
-        .btn-action:disabled { background: var(--border); color: var(--text-muted); cursor: not-allowed; }
+        
+        /* Броня от фантомных нажатий сквозь выключенную кнопку */
+        .btn-action:disabled { 
+            background: var(--border) !important; 
+            color: var(--text-muted) !important; 
+            cursor: not-allowed; 
+            pointer-events: auto !important; 
+        }
+        
         .btn-icon.danger { color: var(--danger); background: rgba(248, 81, 73, 0.1); border-color: rgba(248, 81, 73, 0.2); }
 
         /* Dynamic Morphing Toast */
@@ -208,7 +216,7 @@
 
     <div class="section-title">Live 3D Preview (<span id="valid-count" style="color:var(--success)">0</span>)</div>
     <div class="cards-grid" id="preview-grid">
-        <div style="text-align:center; color:var(--border); font-size:12px; margin-top:20px;">Нет данных для рендера</div>
+        <div style="text-align:center; color:var(--border); font-size:12px; margin-top:20px;">Ожидание данных...</div>
     </div>
 
     <!-- Bottom Action Bar -->
@@ -339,7 +347,6 @@
                 });
         });
 
-        /* АВАРИЙНЫЙ СБРОС (Emergency Flush) при закрытии вкладки */
         window.addEventListener('beforeunload', () => {
             const ta = document.getElementById('raw-input');
             if (ta) localStorage.setItem('anki_draft', ta.value);
@@ -448,7 +455,7 @@
             
             AppState.historyUndo = ta.value; 
             ta.value = ta.value.trim() + (ta.value.trim() ? "\n" : "") + template;
-            handleInputCore();
+            forceSyncUpdate();
             ta.focus();
             showToast("Шаблон добавлен", "success", true);
         }
@@ -466,7 +473,7 @@
             
             ta.focus();
             ta.setSelectionRange(start, start + selected.length + 8);
-            handleInputCore();
+            forceSyncUpdate();
             doVibrate(15);
             showToast("Скрыто (Cloze)", "success", true);
         }
@@ -476,14 +483,14 @@
             if(!ta.value.trim()) return showToast("Уже очищено", "warning"); 
             AppState.historyUndo = ta.value;
             ta.value = '';
-            handleInputCore();
+            forceSyncUpdate();
             showToast("Массив очищен", "info", true);
         }
 
         function undoAction() {
             if(AppState.historyUndo !== null) {
                 document.getElementById('raw-input').value = AppState.historyUndo;
-                handleInputCore();
+                forceSyncUpdate();
                 AppState.historyUndo = null; 
                 document.getElementById('toast').classList.remove('show');
                 doVibrate(15);
@@ -496,13 +503,13 @@
 
         function handleDeckNameChange() {
             const el = document.getElementById('deck-name');
-            localStorage.setItem('anki_deck', el.value); // Прямая легкая запись
+            localStorage.setItem('anki_deck', el.value); 
             el.style.borderColor = 'var(--success)';
             setTimeout(() => el.style.borderColor = '', 500);
         }
 
         /* ==========================================================================
-           6. STATE MACHINE (Main Button)
+           6. STATE MACHINE (Main Button & Sync)
            ========================================================================== */
         async function handleMainAction() {
             if (AppState.isCompiling || AppState.isDownloading || AppState.sqlFailed) return;
@@ -514,32 +521,43 @@
             }
         }
 
+        function resetCompilationState() {
+            AppState.compiledBlob = null;
+            AppState.compiledDataUrl = null;
+            
+            document.getElementById('btn-share').disabled = true;
+            
+            const btn = document.getElementById('btn-compile');
+            btn.disabled = true; 
+            btn.style.background = "var(--border)";
+            btn.style.color = "var(--text-muted)";
+            
+            document.getElementById('compile-text').innerText = "Скомпилировать";
+            document.getElementById('compile-stats').innerText = "Ожидание...";
+        }
+
+        function forceSyncUpdate() {
+            clearTimeout(AppState.inputDebounceTimer); // Kill pending debounces
+            resetCompilationState();
+            handleInputCore();
+        }
+
         /* ==========================================================================
            7. AUTO-PARSER & LIVE PREVIEW
            ========================================================================== */
         function debouncedHandleInput() {
             clearTimeout(AppState.inputDebounceTimer);
             AppState.inputDebounceTimer = setTimeout(() => {
-                // Если юзер печатает во время сборки — ставим в очередь перерасчета
                 if (AppState.isCompiling) {
                     AppState.needsReparse = true;
                     return;
                 }
-
+                resetCompilationState();
                 handleInputCore();
-                
-                // Инвалидация старого кэша
-                if (AppState.compiledBlob || AppState.compiledDataUrl) {
-                    AppState.compiledBlob = null;
-                    AppState.compiledDataUrl = null;
-                    document.getElementById('compile-text').innerText = "Скомпилировать";
-                    document.getElementById('btn-share').disabled = true;
-                }
             }, 300); 
         }
 
         function handleInputCore() {
-            // Сохраняем черновик только внутри защищенного таймера
             const ta = document.getElementById('raw-input');
             localStorage.setItem('anki_draft', ta.value); 
 
@@ -588,12 +606,17 @@
             
             const validCount = AppState.parsedCards.filter(c => !c.error && c.type !== 'error').length;
             const btn = document.getElementById('btn-compile');
-            if (validCount > 0 && AppState.SQL && !AppState.compiledDataUrl && !AppState.sqlFailed) {
+            
+            if (validCount > 0 && AppState.SQL && !AppState.sqlFailed) {
                 btn.disabled = false;
                 document.getElementById('compile-stats').innerText = `${validCount} карт готовы`;
-            } else if (!AppState.compiledDataUrl) {
+                btn.style.background = "var(--success)";
+                btn.style.color = "var(--bg)";
+            } else {
                 btn.disabled = true;
                 document.getElementById('compile-stats').innerText = AppState.sqlFailed ? "ОШИБКА WASM" : "Ожидание...";
+                btn.style.background = "var(--border)";
+                btn.style.color = "var(--text-muted)";
             }
         }
 
@@ -704,7 +727,7 @@
             lines.splice(card.lineIdx, 1);
             ta.value = lines.join('\n');
             
-            handleInputCore();
+            forceSyncUpdate();
             openDbManager(true); 
             doVibrate(15);
             showToast("Карточка удалена", "info", true); 
@@ -746,7 +769,7 @@
             AppState.historyUndo = document.getElementById('raw-input').value;
             document.getElementById('raw-input').value = AppState.presetsDB[name].text;
             document.getElementById('deck-name').value = AppState.presetsDB[name].deck || "Корпоративный Инбокс";
-            handleInputCore();
+            forceSyncUpdate();
             closeModal('presets-modal');
             showToast("Загружено", "info", true);
         }
@@ -920,6 +943,10 @@
                 document.getElementById('compile-text').innerText = "⬇ Скачать .apkg";
                 document.getElementById('btn-share').disabled = false;
                 
+                btn.style.background = "var(--accent)";
+                btn.style.color = "var(--bg)";
+                btn.disabled = false;
+                
                 showToast("Архив успешно скомпилирован!", "success");
                 if (typeof confetti === 'function') confetti({ particleCount: 100, spread: 70, origin: { y: 0.8 }, colors: ['#39d353', '#58a6ff'] });
                 
@@ -931,15 +958,16 @@
             } finally {
                 if (db) db.free();
                 AppState.isCompiling = false;
-                btn.disabled = false;
                 
                 if (!success) {
+                    btn.disabled = false;
                     document.getElementById('compile-text').innerText = "Скомпилировать";
+                    btn.style.background = "var(--success)";
+                    btn.style.color = "var(--bg)";
                     AppState.compiledBlob = null;
                     AppState.compiledDataUrl = null;
                 }
 
-                // Синхронизация: если юзер печатал во время компиляции, пересобираем UI
                 if (AppState.needsReparse) {
                     AppState.needsReparse = false;
                     handleInputCore();
@@ -959,10 +987,10 @@
                 link.click();
                 document.body.removeChild(link);
                 
-                showToast("Скачивание началось!", "success");
+                showToast("Скачивание началось! Если не скачалось — жми 📤", "success");
                 doVibrate(20);
             } catch (e) {
-                showToast("Ошибка при скачивании", "error");
+                showToast("Ошибка скачивания. Жми 📤", "error");
             } finally {
                 AppState.isDownloading = false;
             }
@@ -970,7 +998,7 @@
 
         async function shareApkg() {
             if (!AppState.compiledBlob) return;
-            const file = new File([AppState.compiledBlob], AppState.finalFilename, { type: "application/octet-stream" });
+            const file = new File([AppState.compiledBlob], AppState.finalFilename, { type: "application/zip" });
             
             if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
                 try {
@@ -978,11 +1006,11 @@
                     doVibrate(30);
                 } catch (err) {
                     if (err.name !== 'AbortError') {
-                        showToast("Ошибка Share API", "error");
+                        showToast("Браузер заблокировал Share API", "error");
                     }
                 }
             } else {
-                showToast("Ваш браузер не поддерживает Share File API", "warning");
+                showToast("Share API недоступен в этом браузере", "warning");
             }
         }
     </script>
