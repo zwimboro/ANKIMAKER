@@ -7,11 +7,9 @@
     
     <title>Anki Pro-Engine | PWA</title>
     
-    <!-- PWA Manifest Inline -->
     <link rel="manifest" href="data:application/manifest+json;base64,eyJuYW1lIjoiQW5raSBQcm8tRW5naW5lIiwic2hvcnRfbmFtZSI6IkFua2kgUHJvIiwic3RhcnRfdXJsIjoiLi8iLCJkaXNwbGF5Ijoic3RhbmRhbG9uZSIsImJhY2tncm91bmRfY29sb3IiOiIjMGQxMTE3IiwidGhlbWVfY29sb3IiOiIjMGQxMTE3In0=">
     <link rel="apple-touch-icon" href="https://upload.wikimedia.org/wikipedia/commons/3/3d/Anki-icon.svg"> 
     
-    <!-- Zero-Server Dependencies -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/sql-wasm.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
@@ -136,7 +134,6 @@
         .btn-action span.sub { font-size: 11px; opacity: 0.8; font-variant-numeric: tabular-nums; margin-top: 2px; }
         .btn-action:active:not(.disabled-state) { transform: scale(0.97); }
         
-        /* 3 жестких состояния */
         .btn-state-disabled { background: var(--surface-solid); color: var(--text-muted); border: 1px solid var(--border); }
         .btn-state-ready { background: var(--success); color: var(--bg); border: 1px solid var(--success); }
         .btn-state-download { background: var(--accent); color: var(--bg); border: 1px solid var(--accent); }
@@ -228,7 +225,6 @@
     <div class="bottom-bar">
         <button class="icon-btn danger" onclick="clearInput()" title="Очистить всё">🗑️</button>
         
-        <!-- Жесткая кнопка (без атрибута disabled) -->
         <button class="btn-action btn-state-disabled" id="btn-compile" onclick="handleMainAction()">
             <span id="compile-text">Скомпилировать</span>
             <span class="sub" id="compile-stats">Ожидание...</span>
@@ -278,9 +274,8 @@
 
     <script>
         /* ==========================================================================
-           1. PWA & STORAGE ARMOR (Pro-Diet OS Standards)
+           1. PWA SW NUKE (Убиваем старые кэши воркеров навсегда)
            ========================================================================== */
-        // Убиваем любые старые Service Workers, чтобы юзер всегда видел свежий код
         if ('serviceWorker' in navigator) {
             navigator.serviceWorker.getRegistrations().then(function(registrations) {
                 for(let registration of registrations) {
@@ -314,14 +309,13 @@
         }
 
         /* ==========================================================================
-           2. GLOBAL STATE ENCAPSULATION
+           2. GLOBAL STATE
            ========================================================================== */
         const AppState = {
             SQL: null,
             sqlFailed: false,
             parsedCards: [],
             selectedTags: [],
-            compiledBlob: null,
             compiledDataUrl: null,
             finalFilename: '',
             historyUndo: null, 
@@ -331,7 +325,8 @@
             scrollPosition: 0,
             isScrollLocked: false,
             isCompiling: false,
-            btnState: 'disabled' // 'disabled', 'ready', 'download'
+            needsReparse: false,
+            btnState: 'disabled' 
         };
 
         /* ==========================================================================
@@ -527,7 +522,6 @@
             const sub = document.getElementById('compile-stats');
             const share = document.getElementById('btn-share');
 
-            // Сброс старых классов
             btn.classList.remove('btn-state-disabled', 'btn-state-ready', 'btn-state-download');
 
             if (state === 'disabled') {
@@ -567,7 +561,7 @@
 
         function triggerInput() {
             clearTimeout(AppState.inputDebounceTimer);
-            AppState.compiledDataUrl = null; // Инвалидируем старый архив при любом изменении
+            AppState.compiledDataUrl = null;
             setButtonState('disabled');
             handleInputCore();
         }
@@ -578,6 +572,10 @@
         function debouncedHandleInput() {
             clearTimeout(AppState.inputDebounceTimer);
             AppState.inputDebounceTimer = setTimeout(() => {
+                if (AppState.isCompiling) {
+                    AppState.needsReparse = true;
+                    return;
+                }
                 AppState.compiledDataUrl = null;
                 setButtonState('disabled');
                 handleInputCore();
@@ -890,9 +888,10 @@
 
                 db = new AppState.SQL.Database();
                 
+                // ТАБЛИЦЫ ДОЛЖНЫ СТРОГО СООТВЕТСТВОВАТЬ ФОРМАТУ ANKI 2.1 (С учетом tags, usn в col и sfld text в notes)
                 db.run(`
-                    CREATE TABLE col (id integer primary key, crt integer not null, mod integer not null, scm integer not null, ver integer not null, dconf text not null, decks text not null, models text not null, conf text not null);
-                    CREATE TABLE notes (id integer primary key, guid text not null, mid integer not null, mod integer not null, usn integer not null, tags text not null, flds text not null, sfld integer not null, csum integer not null, flags integer not null, data text not null);
+                    CREATE TABLE col (id integer primary key, crt integer not null, mod integer not null, scm integer not null, ver integer not null, dconf text not null, decks text not null, models text not null, conf text not null, tags text not null, usn integer not null);
+                    CREATE TABLE notes (id integer primary key, guid text not null, mid integer not null, mod integer not null, usn integer not null, tags text not null, flds text not null, sfld text not null, csum integer not null, flags integer not null, data text not null);
                     CREATE TABLE cards (id integer primary key, nid integer not null, did integer not null, ord integer not null, mod integer not null, usn integer not null, type integer not null, queue integer not null, due integer not null, ivl integer not null, factor integer not null, reps integer not null, lapses integer not null, left integer not null, odue integer not null, odid integer not null, flags integer not null, data text not null);
                 `);
 
@@ -901,9 +900,10 @@
                 const basicMid = 1000; const clozeMid = 2000;
                 const tagsStr = AppState.selectedTags.length > 0 ? ` ${AppState.selectedTags.join(' ')} ` : "";
 
+                // JSON Модели с обязательным полем "req" для корректной генерации карточек
                 const modelsJson = {
-                    "1000": { id: basicMid, name: "Pro Basic", type: 0, mod: nowSec, usn: -1, sortf: 0, did: deckId, tmpls: [{ name: "Card 1", ord: 0, qfmt: "<div class='c'>{{Front}}</div>", afmt: "<div class='c'>{{Front}}<hr>{{Back}}</div>", did: null }], flds: [{ name: "Front", ord: 0, sticky: false, rtl: false, font: "Arial", size: 20 }, { name: "Back", ord: 1, sticky: false, rtl: false, font: "Arial", size: 20 }], css: ".card { font-family: sans-serif; text-align: center; color: #c9d1d9; background: #0d1117; } .c { background: #161b22; padding: 20px; border-radius: 12px; border: 1px solid #30363d; margin: 10px; } hr { border: 0; border-top: 1px solid #30363d; margin: 15px 0; }", tags: [] },
-                    "2000": { id: clozeMid, name: "Pro Cloze", type: 1, mod: nowSec, usn: -1, sortf: 0, did: deckId, tmpls: [{ name: "Cloze", ord: 0, qfmt: "<div class='c'>{{cloze:Text}}</div>", afmt: "<div class='c'>{{cloze:Text}}<hr>{{Back Extra}}</div>", did: null }], flds: [{ name: "Text", ord: 0, sticky: false, rtl: false, font: "Arial", size: 20 }, { name: "Back Extra", ord: 1, sticky: false, rtl: false, font: "Arial", size: 20 }], css: ".card { font-family: sans-serif; text-align: center; color: #c9d1d9; background: #0d1117; } .c { background: #161b22; padding: 20px; border-radius: 12px; border: 1px solid #30363d; margin: 10px; } hr { border: 0; border-top: 1px solid #30363d; margin: 15px 0; } .cloze { color: #58a6ff; font-weight: bold; }", tags: [] }
+                    "1000": { id: basicMid, name: "Pro Basic", type: 0, mod: nowSec, usn: -1, sortf: 0, did: deckId, tmpls: [{ name: "Card 1", ord: 0, qfmt: "<div class='c'>{{Front}}</div>", afmt: "<div class='c'>{{Front}}<hr>{{Back}}</div>", bqfmt: "", bafmt: "", did: null }], flds: [{ name: "Front", ord: 0, sticky: false, rtl: false, font: "Arial", size: 20 }, { name: "Back", ord: 1, sticky: false, rtl: false, font: "Arial", size: 20 }], css: ".card { font-family: sans-serif; text-align: center; color: #c9d1d9; background: #0d1117; } .c { background: #161b22; padding: 20px; border-radius: 12px; border: 1px solid #30363d; margin: 10px; } hr { border: 0; border-top: 1px solid #30363d; margin: 15px 0; }", tags: [], req: [[0, "all", [0]]] },
+                    "2000": { id: clozeMid, name: "Pro Cloze", type: 1, mod: nowSec, usn: -1, sortf: 0, did: deckId, tmpls: [{ name: "Cloze", ord: 0, qfmt: "<div class='c'>{{cloze:Text}}</div>", afmt: "<div class='c'>{{cloze:Text}}<hr>{{Back Extra}}</div>", bqfmt: "", bafmt: "", did: null }], flds: [{ name: "Text", ord: 0, sticky: false, rtl: false, font: "Arial", size: 20 }, { name: "Back Extra", ord: 1, sticky: false, rtl: false, font: "Arial", size: 20 }], css: ".card { font-family: sans-serif; text-align: center; color: #c9d1d9; background: #0d1117; } .c { background: #161b22; padding: 20px; border-radius: 12px; border: 1px solid #30363d; margin: 10px; } hr { border: 0; border-top: 1px solid #30363d; margin: 15px 0; } .cloze { color: #58a6ff; font-weight: bold; }", tags: [], req: [[0, "any", [0]]] }
                 };
 
                 const decksJson = { "1": { id: 1, mod: 0, name: "Default", usn: 0, lrnToday: [0,0], revToday: [0,0], newToday: [0,0], timeToday: [0,0], collapsed: false, browserCollapsed: false, desc: "", dyn: 0, conf: 1, extendNew: 10, extendRev: 50 } };
@@ -912,7 +912,7 @@
                 const dconfJson = { "1": { id: 1, mod: 0, name: "Default", usn: 0, maxTaken: 60, autoplay: true, timer: 0, replayq: true, new: { delays: [1, 10], separate: true, ints: [1, 4, 7], initialFactor: 2500, perDay: 20, order: 1 }, rev: { perDay: 200, ease4: 1.3, fuzz: 0.05, minSpace: 1, ivlFct: 1, maxIvl: 36500, bury: false }, lapse: { delays: [10], mult: 0, minInt: 1, leechFct: 8, leechAction: 0 } } };
                 const confJson = { nextPos: 1, estTimes: true, activeDecks: [1], sortType: "noteFld", timeLim: 0, sortBackwards: false, addToCur: true, curDeck: deckId, newBury: true, newSpread: 0, dueCounts: true, curModel: basicMid, collapseTime: 1200 };
 
-                db.run(`INSERT INTO col VALUES (1, ${nowSec}, ${Date.now()}, ${Date.now()}, 11, ?, ?, ?, ?);`, [JSON.stringify(dconfJson), JSON.stringify(decksJson), JSON.stringify(modelsJson), JSON.stringify(confJson)]);
+                db.run(`INSERT INTO col VALUES (1, ${nowSec}, ${Date.now()}, ${Date.now()}, 11, ?, ?, ?, ?, '{}', -1);`, [JSON.stringify(dconfJson), JSON.stringify(decksJson), JSON.stringify(modelsJson), JSON.stringify(confJson)]);
 
                 const baseTime = Date.now() * 1000; 
                 
@@ -947,17 +947,19 @@
                 zip.file("collection.anki2", binaryDb);
                 zip.file("media", "{}");
 
-                const blob = await zip.generateAsync({ type: "blob" });
+                const rawBlob = await zip.generateAsync({ type: "blob" });
+                // Принудительно устанавливаем MIME-тип, чтобы ОС не приписывала .zip
+                AppState.compiledBlob = new Blob([rawBlob], { type: "application/octet-stream" });
                 AppState.finalFilename = `${deckName.replace(/[^a-zA-Z0-9а-яА-Я_-]/g, '_')}.apkg`;
                 
                 AppState.compiledDataUrl = await new Promise((resolve, reject) => {
                     const reader = new FileReader();
                     reader.onloadend = () => resolve(reader.result);
                     reader.onerror = reject;
-                    reader.readAsDataURL(blob);
+                    reader.readAsDataURL(AppState.compiledBlob);
                 });
 
-                const sizeStr = `${(blob.size / 1024).toFixed(1)} KB`;
+                const sizeStr = `${(AppState.compiledBlob.size / 1024).toFixed(1)} KB`;
                 setButtonState('download', 0, sizeStr);
                 
                 showToast("Архив успешно скомпилирован!", "success");
@@ -969,17 +971,23 @@
                 console.error(err);
                 showToast('Ошибка компиляции SQLite', 'error');
             } finally {
-                if (db) db.close(); // Исправлено: корректная очистка C++ памяти для sql.js
+                if (db) db.close(); 
                 AppState.isCompiling = false;
                 
                 if (!success) {
+                    triggerInput();
+                }
+
+                if (AppState.needsReparse) {
+                    AppState.needsReparse = false;
                     triggerInput();
                 }
             }
         }
 
         function downloadApkg() {
-            if (!AppState.compiledDataUrl) return;
+            if (!AppState.compiledDataUrl || AppState.isDownloading) return;
+            AppState.isDownloading = true;
             
             try {
                 const link = document.createElement('a');
@@ -993,6 +1001,8 @@
                 doVibrate(20);
             } catch (e) {
                 showToast("Ошибка скачивания. Жми 📤", "error");
+            } finally {
+                AppState.isDownloading = false;
             }
         }
 
@@ -1000,24 +1010,22 @@
             if (document.getElementById('btn-share').classList.contains('disabled-icon')) {
                 return showToast("Сначала скомпилируйте колоду!", "warning");
             }
-            if (!AppState.compiledDataUrl) return;
+            if (!AppState.compiledBlob) return;
             
-            try {
-                // Извлекаем Blob из DataUrl обратно для Share API
-                const res = await fetch(AppState.compiledDataUrl);
-                const blob = await res.blob();
-                const file = new File([blob], AppState.finalFilename, { type: "application/zip" });
-                
-                if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
-                    await navigator.share({ files: [file] });
+            // Используем octet-stream и для Share API, чтобы избежать добавления .zip Android-системой
+            const file = new File([AppState.compiledBlob], AppState.finalFilename, { type: "application/octet-stream" });
+            
+            if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+                try {
+                    await navigator.share({ files: [file], title: 'Anki Pro Deck' });
                     doVibrate(30);
-                } else {
-                    showToast("Устройство не поддерживает прямую передачу", "warning");
+                } catch (err) {
+                    if (err.name !== 'AbortError') {
+                        showToast("Браузер заблокировал Share API", "error");
+                    }
                 }
-            } catch (err) {
-                if (err.name !== 'AbortError') {
-                    showToast("Браузер заблокировал Share API", "error");
-                }
+            } else {
+                showToast("Устройство не поддерживает Share API. Нажми 'Скачать'", "warning");
             }
         }
     </script>
