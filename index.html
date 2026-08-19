@@ -32,6 +32,7 @@
             --glow-color: rgba(88, 166, 255, 0.15);
         }
 
+        /* Глобальная защита от фантомных выделений текста */
         * { 
             box-sizing: border-box; 
             margin: 0; 
@@ -44,11 +45,17 @@
             background-color: var(--bg); color: var(--text); 
             padding: calc(15px + env(safe-area-inset-top, 0px)) 15px calc(140px + env(safe-area-inset-bottom, 0px)); 
             overflow-x: hidden; min-height: 100vh;
+            -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+        }
+
+        /* Разрешаем выделение только там, где это физически нужно */
+        input, textarea, .card-text {
+            -webkit-user-select: text; user-select: text;
         }
 
         body.modal-open { overflow: hidden; height: 100vh; }
 
-        button, .chip, .card-3d, .icon-btn, .toast-undo { 
+        button, a, .chip, .card-3d, .icon-btn, .toast-undo, .btn-action { 
             touch-action: manipulation; 
         }
 
@@ -64,11 +71,12 @@
             display: flex; justify-content: space-between; align-items: center; 
             padding-bottom: 15px; border-bottom: 1px solid var(--border); margin-bottom: 20px; 
         }
-        h1 { font-size: 18px; color: var(--accent); text-transform: uppercase; letter-spacing: 1.5px; user-select: none; }
+        h1 { font-size: 18px; color: var(--accent); text-transform: uppercase; letter-spacing: 1.5px; }
         .header-actions { display: flex; gap: 8px; }
-        .icon-btn { background: var(--surface-solid); border: 1px solid var(--border); color: var(--text-muted); border-radius: 8px; width: 38px; height: 38px; display: flex; justify-content: center; align-items: center; cursor: pointer; transition: 0.2s; font-size: 16px; user-select: none; }
+        .icon-btn { background: var(--surface-solid); border: 1px solid var(--border); color: var(--text-muted); border-radius: 8px; width: 38px; height: 38px; display: flex; justify-content: center; align-items: center; cursor: pointer; transition: 0.2s; font-size: 16px; }
         .icon-btn:active { transform: scale(0.9); }
         .icon-btn:hover { color: var(--accent); border-color: var(--accent); }
+        .icon-btn.disabled-state { opacity: 0.3; pointer-events: none; }
 
         /* Titles & Inputs */
         .section-title { font-size: 11px; color: var(--text-muted); text-transform: uppercase; margin-bottom: 8px; letter-spacing: 0.5px; font-weight: bold; }
@@ -79,7 +87,7 @@
         /* Chips & Tags */
         .chip-scroll { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 10px; margin-bottom: 15px; scrollbar-width: none; }
         .chip-scroll::-webkit-scrollbar { display: none; }
-        .chip { background: var(--surface-solid); border: 1px solid var(--border); padding: 6px 14px; border-radius: 20px; font-size: 12px; white-space: nowrap; cursor: pointer; transition: 0.2s; user-select: none; color: var(--text); }
+        .chip { background: var(--surface-solid); border: 1px solid var(--border); padding: 6px 14px; border-radius: 20px; font-size: 12px; white-space: nowrap; cursor: pointer; transition: 0.2s; color: var(--text); }
         .chip.active { background: var(--accent); color: var(--bg); border-color: var(--accent); font-weight: bold; }
         .chip.combo { background: rgba(57, 211, 83, 0.1); color: var(--success); border-color: rgba(57, 211, 83, 0.3); }
 
@@ -123,20 +131,18 @@
             border: 1px solid rgba(255,255,255,0.1); border-radius: 20px; padding: 12px; display: flex; gap: 10px; align-items: center; z-index: 100;
             box-shadow: 0 10px 30px rgba(0,0,0,0.6);
         }
+        
         .btn-action { 
-            background: var(--success); color: var(--bg); border: none; padding: 14px; border-radius: 14px; font-weight: bold; font-size: 15px; text-transform: uppercase; 
+            border: none; padding: 14px; border-radius: 14px; font-weight: bold; font-size: 15px; text-transform: uppercase; 
             flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; cursor: pointer; transition: 0.2s;
         }
         .btn-action span.sub { font-size: 11px; opacity: 0.8; font-variant-numeric: tabular-nums; margin-top: 2px; }
-        .btn-action:active:not(:disabled) { transform: scale(0.97); }
+        .btn-action:active:not(.disabled-state) { transform: scale(0.97); }
         
-        /* Броня от фантомных нажатий сквозь выключенную кнопку */
-        .btn-action:disabled { 
-            background: var(--border) !important; 
-            color: var(--text-muted) !important; 
-            cursor: not-allowed; 
-            pointer-events: auto !important; 
-        }
+        /* Жесткие стейты кнопки (Никаких disabled атрибутов HTML) */
+        .btn-action.disabled-state { background: var(--surface-solid); color: var(--text-muted); border: 1px solid var(--border); cursor: not-allowed; }
+        .btn-action.ready-state { background: var(--success); color: var(--bg); }
+        .btn-action.download-state { background: var(--accent); color: var(--bg); }
         
         .btn-icon.danger { color: var(--danger); background: rgba(248, 81, 73, 0.1); border-color: rgba(248, 81, 73, 0.2); }
 
@@ -208,7 +214,7 @@
 
     <div class="section-title">Data Ingestion (Auto-Parse)</div>
     <div class="editor-wrapper">
-        <textarea id="raw-input" placeholder="Вставь сырой текст от нейросети...&#10;Разделители: |, \t, : или ,&#10;Либо выдели слово и нажми [Скрыть] для Cloze." oninput="debouncedHandleInput()"></textarea>
+        <textarea id="raw-input" placeholder="Вставь сырой текст от нейросети...&#10;Разделители: |, \t, : или ,&#10;Либо выдели слово и нажми [Скрыть] для Cloze." oninput="triggerInput()"></textarea>
         <div class="editor-tools">
             <button class="tool-btn" onclick="wrapCloze()">[ ] Скрыть (Cloze)</button>
         </div>
@@ -222,12 +228,12 @@
     <!-- Bottom Action Bar -->
     <div class="bottom-bar">
         <button class="icon-btn danger" onclick="clearInput()" title="Очистить всё">🗑️</button>
-        <!-- Единая кнопка, логика управляется стейт-машиной в JS -->
-        <button class="btn-action" id="btn-compile" disabled onclick="handleMainAction()">
+        <!-- Кнопка без атрибута disabled. Логика перенесена в CSS-классы и JS. Больше не муляж. -->
+        <button class="btn-action disabled-state" id="btn-compile" onclick="handleMainAction()">
             <span id="compile-text">Скомпилировать</span>
             <span class="sub" id="compile-stats">Ожидание...</span>
         </button>
-        <button class="icon-btn" id="btn-share" disabled onclick="shareApkg()" title="Поделиться">📤</button>
+        <button class="icon-btn disabled-state" id="btn-share" onclick="shareApkg()" title="Поделиться">📤</button>
     </div>
 
     <!-- Modal: DB Manager -->
@@ -273,10 +279,9 @@
         /* ==========================================================================
            1. PWA & STORAGE ARMOR (Pro-Diet OS Standards)
            ========================================================================== */
-        // Для поддержки кэша создайте стандартный sw.js файл в корне проекта.
         if ('serviceWorker' in navigator && location.protocol !== 'file:') {
             navigator.serviceWorker.register('sw.js').catch(() => {
-                console.warn('PWA: Service Worker file "sw.js" not found. Running in online-only mode.');
+                console.warn('PWA: Service Worker "sw.js" не найден. Работает в online-only режиме.');
             });
         }
 
@@ -299,7 +304,7 @@
                 else localStorage.setItem(key, JSON.stringify(data)); 
                 return true;
             } catch (e) {
-                showToast("Превышен лимит памяти!", "error");
+                showToast("Превышен лимит памяти браузера!", "error");
                 return false;
             }
         }
@@ -313,7 +318,6 @@
             parsedCards: [],
             selectedTags: [],
             compiledBlob: null,
-            compiledDataUrl: null, 
             finalFilename: '',
             historyUndo: null, 
             toastTimer: null,
@@ -322,8 +326,7 @@
             scrollPosition: 0,
             isScrollLocked: false,
             isCompiling: false,
-            needsReparse: false,
-            isDownloading: false
+            needsReparse: false
         };
 
         /* ==========================================================================
@@ -338,11 +341,11 @@
             initSqlJs({ locateFile: file => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/${file}` })
                 .then(instance => { 
                     AppState.SQL = instance; 
-                    showToast("System Online: WASM Active", "success");
+                    showToast("Движок WASM загружен", "success");
                     loadDraft();
                 })
                 .catch(e => {
-                    showToast("Critical Error: WebAssembly failed", "error");
+                    showToast("Критическая ошибка загрузки WebAssembly", "error");
                     AppState.sqlFailed = true;
                 });
         });
@@ -512,34 +515,44 @@
            6. STATE MACHINE (Main Button & Sync)
            ========================================================================== */
         async function handleMainAction() {
-            if (AppState.isCompiling || AppState.isDownloading || AppState.sqlFailed) return;
+            if (AppState.sqlFailed) return showToast("Ошибка: WASM движок не загружен", "error");
+            
+            const validCount = AppState.parsedCards.filter(c => !c.error && c.type !== 'error').length;
+            if (validCount === 0 && !AppState.compiledBlob) {
+                return showToast("Нет карточек. Проверь разделители (| или :)", "error");
+            }
 
-            if (AppState.compiledDataUrl) {
+            if (AppState.isCompiling) return showToast("Идет компиляция...", "warning");
+
+            if (AppState.compiledBlob) {
                 downloadApkg();
             } else {
-                await compileAnkiDeck();
+                compileAnkiDeck(); // Синхронный вызов async-функции, чтобы не терять контекст
             }
         }
 
         function resetCompilationState() {
             AppState.compiledBlob = null;
-            AppState.compiledDataUrl = null;
             
-            document.getElementById('btn-share').disabled = true;
+            const shareBtn = document.getElementById('btn-share');
+            shareBtn.classList.add('disabled-state');
             
             const btn = document.getElementById('btn-compile');
-            btn.disabled = true; 
-            btn.style.background = "var(--border)";
-            btn.style.color = "var(--text-muted)";
+            btn.className = 'btn-action disabled-state';
             
             document.getElementById('compile-text').innerText = "Скомпилировать";
             document.getElementById('compile-stats').innerText = "Ожидание...";
         }
 
         function forceSyncUpdate() {
-            clearTimeout(AppState.inputDebounceTimer); // Kill pending debounces
+            clearTimeout(AppState.inputDebounceTimer);
             resetCompilationState();
             handleInputCore();
+        }
+
+        function triggerInput() {
+            resetCompilationState();
+            debouncedHandleInput();
         }
 
         /* ==========================================================================
@@ -552,7 +565,6 @@
                     AppState.needsReparse = true;
                     return;
                 }
-                resetCompilationState();
                 handleInputCore();
             }, 300); 
         }
@@ -608,15 +620,11 @@
             const btn = document.getElementById('btn-compile');
             
             if (validCount > 0 && AppState.SQL && !AppState.sqlFailed) {
-                btn.disabled = false;
+                btn.className = 'btn-action ready-state';
                 document.getElementById('compile-stats').innerText = `${validCount} карт готовы`;
-                btn.style.background = "var(--success)";
-                btn.style.color = "var(--bg)";
             } else {
-                btn.disabled = true;
+                btn.className = 'btn-action disabled-state';
                 document.getElementById('compile-stats').innerText = AppState.sqlFailed ? "ОШИБКА WASM" : "Ожидание...";
-                btn.style.background = "var(--border)";
-                btn.style.color = "var(--text-muted)";
             }
         }
 
@@ -859,10 +867,11 @@
             let success = false;
 
             const btn = document.getElementById('btn-compile');
-            btn.disabled = true;
+            btn.className = 'btn-action disabled-state';
             document.getElementById('compile-text').innerText = "Компиляция...";
             doVibrate(30);
 
+            // Фикс DOM-фриза
             await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
 
             let db = null;
@@ -932,20 +941,14 @@
                 AppState.compiledBlob = await zip.generateAsync({ type: "blob" });
                 AppState.finalFilename = `${deckName.replace(/[^a-zA-Z0-9а-яА-Я_-]/g, '_')}.apkg`;
                 
-                AppState.compiledDataUrl = await new Promise((resolve, reject) => {
-                    const reader = new FileReader();
-                    reader.onloadend = () => resolve(reader.result);
-                    reader.onerror = reject;
-                    reader.readAsDataURL(AppState.compiledBlob);
-                });
-
+                // Успешная сборка - зажигаем кнопку синим "Скачать"
                 document.getElementById('compile-stats').innerText = `${(AppState.compiledBlob.size / 1024).toFixed(1)} KB`;
                 document.getElementById('compile-text').innerText = "⬇ Скачать .apkg";
-                document.getElementById('btn-share').disabled = false;
                 
-                btn.style.background = "var(--accent)";
-                btn.style.color = "var(--bg)";
-                btn.disabled = false;
+                const shareBtn = document.getElementById('btn-share');
+                shareBtn.classList.remove('disabled-state');
+                
+                btn.className = 'btn-action download-state';
                 
                 showToast("Архив успешно скомпилирован!", "success");
                 if (typeof confetti === 'function') confetti({ particleCount: 100, spread: 70, origin: { y: 0.8 }, colors: ['#39d353', '#58a6ff'] });
@@ -960,51 +963,59 @@
                 AppState.isCompiling = false;
                 
                 if (!success) {
-                    btn.disabled = false;
-                    document.getElementById('compile-text').innerText = "Скомпилировать";
-                    btn.style.background = "var(--success)";
-                    btn.style.color = "var(--bg)";
-                    AppState.compiledBlob = null;
-                    AppState.compiledDataUrl = null;
+                    resetCompilationState();
+                    handleInputCore();
                 }
 
+                // Синхронизация: если юзер печатал во время компиляции, пересобираем UI
                 if (AppState.needsReparse) {
                     AppState.needsReparse = false;
-                    handleInputCore();
+                    forceSyncUpdate();
                 }
             }
         }
 
         function downloadApkg() {
-            if (!AppState.compiledDataUrl || AppState.isDownloading) return;
-            AppState.isDownloading = true;
+            if (!AppState.compiledBlob) return;
             
             try {
+                // Создаем Object URL локально в синхронном потоке (обходим Safari Block)
+                const url = window.URL.createObjectURL(AppState.compiledBlob);
                 const link = document.createElement('a');
-                link.href = AppState.compiledDataUrl;
+                link.style.display = 'none';
+                link.href = url;
                 link.download = AppState.finalFilename;
                 document.body.appendChild(link);
                 link.click();
-                document.body.removeChild(link);
                 
-                showToast("Скачивание началось! Если не скачалось — жми 📤", "success");
+                // Освобождаем память после старта скачивания
+                setTimeout(() => {
+                    document.body.removeChild(link);
+                    window.URL.revokeObjectURL(url);
+                }, 1000);
+                
+                showToast("Скачивание началось! Если нет — жми 📤", "success");
                 doVibrate(20);
             } catch (e) {
                 showToast("Ошибка скачивания. Жми 📤", "error");
-            } finally {
-                AppState.isDownloading = false;
             }
         }
 
         async function shareApkg() {
+            if (document.getElementById('btn-share').classList.contains('disabled-state')) {
+                return showToast("Сначала скомпилируйте колоду!", "warning");
+            }
             if (!AppState.compiledBlob) return;
-            const file = new File([AppState.compiledBlob], AppState.finalFilename, { type: "application/zip" });
+            
+            // Использование MIME application/octet-stream повышает совместимость с Android Share
+            const file = new File([AppState.compiledBlob], AppState.finalFilename, { type: "application/octet-stream" });
             
             if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
                 try {
-                    await navigator.share({ files: [file], title: 'Anki Pro Deck', text: 'Сборка карточек готова.' });
+                    await navigator.share({ files: [file] });
                     doVibrate(30);
                 } catch (err) {
+                    // Игнорируем AbortError (юзер просто закрыл меню "поделиться")
                     if (err.name !== 'AbortError') {
                         showToast("Браузер заблокировал Share API", "error");
                     }
