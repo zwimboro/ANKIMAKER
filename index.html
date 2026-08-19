@@ -1,0 +1,991 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="theme-color" content="#0d1117">
+    
+    <title>Anki Pro-Engine | PWA</title>
+    
+    <!-- PWA Manifest Inline -->
+    <link rel="manifest" href="data:application/manifest+json;base64,eyJuYW1lIjoiQW5raSBQcm8tRW5naW5lIiwic2hvcnRfbmFtZSI6IkFua2kgUHJvIiwic3RhcnRfdXJsIjoiLi8iLCJkaXNwbGF5Ijoic3RhbmRhbG9uZSIsImJhY2tncm91bmRfY29sb3IiOiIjMGQxMTE3IiwidGhlbWVfY29sb3IiOiIjMGQxMTE3In0=">
+    <link rel="apple-touch-icon" href="https://upload.wikimedia.org/wikipedia/commons/3/3d/Anki-icon.svg"> 
+    
+    <!-- Zero-Server Dependencies -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/sql-wasm.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+
+    <style>
+        :root {
+            --bg: #0d1117;
+            --surface: rgba(22, 27, 34, 0.7);
+            --surface-solid: #161b22;
+            --surface-hover: #21262d;
+            --text: #c9d1d9;
+            --text-muted: #8b949e;
+            --accent: #58a6ff;
+            --success: #39d353;
+            --danger: #f85149;
+            --warning: #d29922;
+            --border: #30363d;
+            --glow-color: rgba(88, 166, 255, 0.15);
+        }
+
+        * { 
+            box-sizing: border-box; 
+            margin: 0; 
+            padding: 0; 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; 
+            -webkit-tap-highlight-color: transparent; 
+        }
+        
+        body { 
+            background-color: var(--bg); color: var(--text); 
+            padding: calc(15px + env(safe-area-inset-top, 0px)) 15px calc(140px + env(safe-area-inset-bottom, 0px)); 
+            overflow-x: hidden; min-height: 100vh;
+        }
+
+        body.modal-open { overflow: hidden; height: 100vh; }
+
+        button, .chip, .card-3d, .icon-btn, .toast-undo { 
+            touch-action: manipulation; 
+        }
+
+        /* Ambient Mesh Glow */
+        .ambient-glow {
+            position: fixed; top: -20%; left: -20%; width: 140%; height: 140%;
+            background: radial-gradient(circle at 50% 30%, var(--glow-color) 0%, transparent 60%);
+            z-index: -1; transition: background 0.6s cubic-bezier(0.25, 0.46, 0.45, 0.94); pointer-events: none;
+        }
+
+        /* Header & Navigation */
+        header { 
+            display: flex; justify-content: space-between; align-items: center; 
+            padding-bottom: 15px; border-bottom: 1px solid var(--border); margin-bottom: 20px; 
+        }
+        h1 { font-size: 18px; color: var(--accent); text-transform: uppercase; letter-spacing: 1.5px; user-select: none; }
+        .header-actions { display: flex; gap: 8px; }
+        .icon-btn { background: var(--surface-solid); border: 1px solid var(--border); color: var(--text-muted); border-radius: 8px; width: 38px; height: 38px; display: flex; justify-content: center; align-items: center; cursor: pointer; transition: 0.2s; font-size: 16px; user-select: none; }
+        .icon-btn:active { transform: scale(0.9); }
+        .icon-btn:hover { color: var(--accent); border-color: var(--accent); }
+
+        /* Titles & Inputs */
+        .section-title { font-size: 11px; color: var(--text-muted); text-transform: uppercase; margin-bottom: 8px; letter-spacing: 0.5px; font-weight: bold; }
+        .input-row { display: flex; gap: 10px; margin-bottom: 20px; }
+        .input-text { flex: 1; background: var(--surface-solid); border: 1px solid var(--border); color: var(--text); padding: 12px; border-radius: 10px; font-size: 16px; outline: none; transition: 0.3s; font-weight: bold; }
+        .input-text:focus { border-color: var(--accent); box-shadow: 0 0 10px rgba(88,166,255,0.1); }
+
+        /* Chips & Tags */
+        .chip-scroll { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 10px; margin-bottom: 15px; scrollbar-width: none; }
+        .chip-scroll::-webkit-scrollbar { display: none; }
+        .chip { background: var(--surface-solid); border: 1px solid var(--border); padding: 6px 14px; border-radius: 20px; font-size: 12px; white-space: nowrap; cursor: pointer; transition: 0.2s; user-select: none; color: var(--text); }
+        .chip.active { background: var(--accent); color: var(--bg); border-color: var(--accent); font-weight: bold; }
+        .chip.combo { background: rgba(57, 211, 83, 0.1); color: var(--success); border-color: rgba(57, 211, 83, 0.3); }
+
+        /* Smart Textarea */
+        .editor-wrapper { position: relative; margin-bottom: 25px; }
+        textarea { 
+            width: 100%; height: 220px; background: var(--surface-solid); border: 1px solid var(--border); 
+            color: var(--text); padding: 15px; padding-bottom: 50px; border-radius: 12px; font-size: 16px; resize: none; outline: none; 
+            font-family: monospace; line-height: 1.6; transition: 0.3s; box-shadow: inset 0 2px 4px rgba(0,0,0,0.4);
+        }
+        textarea:focus { border-color: var(--accent); }
+        .editor-tools { position: absolute; bottom: 12px; right: 12px; display: flex; gap: 8px; }
+        .tool-btn { background: rgba(88, 166, 255, 0.15); border: 1px solid rgba(88, 166, 255, 0.3); color: var(--accent); padding: 6px 12px; border-radius: 8px; font-size: 12px; cursor: pointer; font-weight: bold; transition: 0.2s; }
+        .tool-btn:active { transform: scale(0.9); }
+
+        /* 3D Live Preview Grid */
+        .cards-grid { display: grid; grid-template-columns: 1fr; gap: 12px; margin-bottom: 30px; }
+        .scene { perspective: 1000px; width: 100%; min-height: 80px; }
+        .card-3d { width: 100%; height: 100%; position: relative; transition: transform 0.6s cubic-bezier(0.4, 0.2, 0.2, 1); transform-style: preserve-3d; cursor: pointer; }
+        .card-3d.flipped { transform: rotateX(180deg); }
+        
+        .card-face { 
+            position: absolute; width: 100%; height: 100%; backface-visibility: hidden; 
+            border-radius: 12px; padding: 15px; 
+            border: 1px solid var(--border); background: var(--surface-solid); box-shadow: 0 4px 6px rgba(0,0,0,0.2); 
+            overflow-y: auto; overflow-x: hidden; scrollbar-width: none; 
+        }
+        .card-face::-webkit-scrollbar { display: none; }
+        .card-back { transform: rotateX(180deg); background: #0f1319; border-color: var(--success); }
+        
+        .card-content-wrapper { min-height: 100%; display: flex; flex-direction: column; justify-content: center; align-items: center; width: 100%; }
+        .card-text { font-size: 14px; word-break: break-word; text-align: center; }
+        .card-error { border-color: var(--danger); background: rgba(248, 81, 73, 0.05); }
+        .err-label { font-size: 10px; color: var(--danger); text-align: center; margin-top: 8px; font-weight: bold; text-transform: uppercase; }
+        .cloze-mark { color: var(--accent); font-weight: bold; background: rgba(88,166,255,0.1); padding: 2px 6px; border-radius: 4px; border: 1px solid rgba(88,166,255,0.3); }
+
+        /* Glassmorphism Bottom Bar */
+        .bottom-bar { 
+            position: fixed; bottom: calc(20px + env(safe-area-inset-bottom, 0px)); left: 50%; transform: translateX(-50%); 
+            width: 92%; max-width: 600px; background: var(--surface); backdrop-filter: blur(15px); -webkit-backdrop-filter: blur(15px); 
+            border: 1px solid rgba(255,255,255,0.1); border-radius: 20px; padding: 12px; display: flex; gap: 10px; align-items: center; z-index: 100;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.6);
+        }
+        .btn-action { 
+            background: var(--success); color: var(--bg); border: none; padding: 14px; border-radius: 14px; font-weight: bold; font-size: 15px; text-transform: uppercase; 
+            flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; cursor: pointer; transition: 0.2s;
+        }
+        .btn-action span.sub { font-size: 11px; opacity: 0.8; font-variant-numeric: tabular-nums; margin-top: 2px; }
+        .btn-action:active:not(:disabled) { transform: scale(0.97); }
+        .btn-action:disabled { background: var(--border); color: var(--text-muted); cursor: not-allowed; }
+        .btn-icon.danger { color: var(--danger); background: rgba(248, 81, 73, 0.1); border-color: rgba(248, 81, 73, 0.2); }
+
+        /* Dynamic Morphing Toast - z-index increased to prevent modal overlap */
+        .toast { 
+            position: fixed; top: -80px; left: 50%; transform: translateX(-50%); background: #000; color: #fff; padding: 10px 20px; border-radius: 30px; font-size: 13px; font-weight: bold; 
+            display: flex; align-items: center; gap: 12px; z-index: 3000; transition: all 0.5s cubic-bezier(0.68, -0.55, 0.265, 1.55); box-shadow: 0 10px 25px rgba(0,0,0,0.6); border: 1px solid rgba(255,255,255,0.1);
+        }
+        .toast.show { top: calc(20px + env(safe-area-inset-top, 0px)); }
+        .toast-undo { background: var(--accent); color: #000; border: none; padding: 6px 12px; border-radius: 10px; font-size: 12px; font-weight: bold; cursor: pointer; transition: 0.2s; }
+        .toast-undo:active { transform: scale(0.9); }
+
+        /* Modals */
+        .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); backdrop-filter: blur(8px); z-index: 2000; justify-content: center; align-items: center; padding: 20px; opacity: 0; transition: 0.2s; }
+        .modal.active { display: flex; opacity: 1; }
+        .modal-content { background: var(--surface-solid); border: 1px solid var(--border); padding: 20px; border-radius: 16px; width: 100%; max-width: 450px; transform: scale(0.95); transition: 0.2s; max-height: 85vh; overflow-y: auto; }
+        .modal.active .modal-content { transform: scale(1); }
+        .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; color: var(--accent); font-weight: bold; font-size: 18px;}
+        
+        .db-row { display: flex; justify-content: space-between; align-items: center; background: var(--bg); padding: 12px; border-radius: 10px; margin-bottom: 8px; border: 1px solid var(--border); font-size: 13px;}
+        .db-row .db-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; margin-right: 10px; color: var(--text); }
+        .btn-modal-del { background: rgba(248, 81, 73, 0.1); color: var(--danger); border: 1px solid rgba(248,81,73,0.3); padding: 6px 10px; border-radius: 8px; font-size: 12px; cursor: pointer; }
+        .btn-modal-load { background: rgba(57, 211, 83, 0.1); color: var(--success); border: 1px solid rgba(57,211,83,0.3); padding: 6px 10px; border-radius: 8px; font-size: 12px; cursor: pointer; }
+
+        .modal-input { width: 100%; background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 12px; border-radius: 10px; margin-bottom: 10px; outline: none; font-size: 16px; transition: border-color 0.3s ease; }
+        .modal-input:focus { border-color: var(--accent); }
+    </style>
+</head>
+<body>
+
+    <!-- Ambient Mesh Glow -->
+    <div class="ambient-glow" id="ambient-glow"></div>
+
+    <!-- Morphing Dynamic Toast -->
+    <div id="toast" class="toast">
+        <span id="toast-msg"></span>
+        <button id="toast-undo" class="toast-undo" style="display: none;" onclick="undoAction()">Отменить</button>
+    </div>
+
+    <header>
+        <h1>Anki Pro-Engine</h1>
+        <div class="header-actions">
+            <button class="icon-btn" onclick="copySystemPrompt()" title="Системный Промпт ИИ">🧠</button>
+            <button class="icon-btn" onclick="openModal('presets-modal'); openPresetsManager();" title="Шаблоны ввода">📁</button>
+            <button class="icon-btn" onclick="openModal('db-modal'); openDbManager();" title="Управление карточками">🗄️</button>
+            <button class="icon-btn" onclick="openModal('backup-modal')" title="Бэкап конфигурации">⚙️</button>
+        </div>
+    </header>
+
+    <div class="section-title">Колода</div>
+    <div class="input-row">
+        <input type="text" id="deck-name" class="input-text" placeholder="Название колоды" value="Корпоративный Инбокс" oninput="handleDeckNameChange()" onkeypress="if(event.key === 'Enter') this.blur();">
+    </div>
+
+    <div class="section-title">Быстрые Контексты (Combos)</div>
+    <div class="chip-scroll" id="combos-cloud">
+        <div class="chip combo" onclick="applyCombo('IT')">💻 IT-Термины</div>
+        <div class="chip combo" onclick="applyCombo('Lang')">🗣️ Языки (B2)</div>
+        <div class="chip combo" onclick="applyCombo('Law')">🛡️ Нормативы</div>
+    </div>
+
+    <div class="section-title">Теги коллекции</div>
+    <div class="chip-scroll" id="tag-cloud">
+        <div class="chip" onclick="toggleTag(this, 'work')">#work</div>
+        <div class="chip" onclick="toggleTag(this, 'urgent')">#urgent</div>
+        <div class="chip" onclick="toggleTag(this, 'exam')">#exam</div>
+        <div class="chip" onclick="toggleTag(this, 'dev')">#dev</div>
+    </div>
+
+    <div class="section-title">Data Ingestion (Auto-Parse)</div>
+    <div class="editor-wrapper">
+        <textarea id="raw-input" placeholder="Вставь сырой текст от нейросети...&#10;Разделители: |, \t, : или ,&#10;Либо выдели слово и нажми [Скрыть] для Cloze." oninput="debouncedHandleInput()"></textarea>
+        <div class="editor-tools">
+            <button class="tool-btn" onclick="wrapCloze()">[ ] Скрыть (Cloze)</button>
+        </div>
+    </div>
+
+    <div class="section-title">Live 3D Preview (<span id="valid-count" style="color:var(--success)">0</span>)</div>
+    <div class="cards-grid" id="preview-grid">
+        <div style="text-align:center; color:var(--border); font-size:12px; margin-top:20px;">Нет данных для рендера</div>
+    </div>
+
+    <!-- Bottom Action Bar -->
+    <div class="bottom-bar">
+        <button class="icon-btn danger" onclick="clearInput()" title="Очистить всё">🗑️</button>
+        <button class="btn-action" id="btn-compile" disabled onclick="compileAnkiDeck()">
+            <span id="compile-text">Скомпилировать</span>
+            <span class="sub" id="compile-stats">Ожидание...</span>
+        </button>
+        <button class="icon-btn" id="btn-share" disabled onclick="shareApkg()" title="Поделиться">📤</button>
+    </div>
+
+    <!-- Modal: DB Manager -->
+    <div class="modal" id="db-modal" onclick="if(event.target===this) closeModal('db-modal')">
+        <div class="modal-content">
+            <div class="modal-header">
+                <span>Парсер-Менеджер</span>
+                <span onclick="closeModal('db-modal')" class="icon-btn" style="border:none;">✕</span>
+            </div>
+            <div id="db-list" style="max-height: 60vh; overflow-y: auto;"></div>
+        </div>
+    </div>
+
+    <!-- Modal: Presets Manager -->
+    <div class="modal" id="presets-modal" onclick="if(event.target===this) closeModal('presets-modal')">
+        <div class="modal-content">
+            <div class="modal-header">
+                <span>Локальные Шаблоны</span>
+                <span onclick="closeModal('presets-modal')" class="icon-btn" style="border:none;">✕</span>
+            </div>
+            <div style="display:flex; gap:10px; margin-bottom:20px;">
+                <input type="text" id="preset-name" class="modal-input" placeholder="Имя черновика..." style="margin:0;" onkeypress="if(event.key === 'Enter') savePreset()">
+                <button class="tool-btn" onclick="savePreset()" style="padding:0 20px;">💾</button>
+            </div>
+            <div id="presets-list"></div>
+        </div>
+    </div>
+
+    <!-- Modal: Backup & Settings -->
+    <div class="modal" id="backup-modal" onclick="if(event.target===this) closeModal('backup-modal')">
+        <div class="modal-content">
+            <div class="modal-header">
+                <span>Бэкап и Данные</span>
+                <span onclick="closeModal('backup-modal')" class="icon-btn" style="border:none;">✕</span>
+            </div>
+            <button class="tool-btn" style="width:100%; padding:15px; margin-bottom:10px; font-size:14px;" onclick="exportJson()">💾 Скачать Backup (.json)</button>
+            <button class="tool-btn" style="width:100%; padding:15px; background:transparent; border-style:dashed;" onclick="document.getElementById('import-file').click()">📂 Восстановить Backup</button>
+            <input type="file" id="import-file" accept=".json" style="display:none;" onchange="importJson(event)">
+        </div>
+    </div>
+
+    <script>
+        /* ==========================================================================
+           1. PWA & STORAGE ARMOR (Pro-Diet OS Standards)
+           ========================================================================== */
+        const SW_VERSION = 'v10';
+        if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+            const currentSwVer = localStorage.getItem('anki_sw_ver');
+            
+            if (currentSwVer !== SW_VERSION) {
+                // Hard upgrade pattern for blob-based inline SW
+                navigator.serviceWorker.getRegistrations().then(regs => {
+                    Promise.all(regs.map(r => r.unregister())).then(() => {
+                        localStorage.setItem('anki_sw_ver', SW_VERSION);
+                        registerSW();
+                    });
+                });
+            } else {
+                navigator.serviceWorker.getRegistrations().then(regs => {
+                    if (regs.length === 0) registerSW();
+                });
+            }
+
+            function registerSW() {
+                const swCode = `
+                    const CACHE = 'anki-pro-${SW_VERSION}';
+                    const APP_ORIGIN = '${location.origin}';
+                    const ASSETS = [
+                        APP_ORIGIN + location.pathname,
+                        'https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/sql-wasm.js',
+                        'https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/sql-wasm.wasm',
+                        'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js',
+                        'https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js'
+                    ];
+
+                    self.addEventListener('install', e => {
+                        self.skipWaiting();
+                        e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS)));
+                    });
+
+                    self.addEventListener('activate', e => {
+                        e.waitUntil(
+                            caches.keys().then(keys => Promise.all(
+                                keys.map(k => k !== CACHE ? caches.delete(k) : null)
+                            )).then(() => self.clients.claim())
+                        );
+                    });
+
+                    self.addEventListener('fetch', e => {
+                        const url = new URL(e.request.url);
+                        // Security: Block caching of non-HTTP and unverified third-party domains
+                        if (e.request.method !== 'GET' || !e.request.url.startsWith('http')) return;
+                        if (url.origin !== APP_ORIGIN && !url.hostname.includes('cloudflare.com') && !url.hostname.includes('jsdelivr.net')) return;
+                        
+                        e.respondWith(
+                            caches.open(CACHE).then(cache => {
+                                return cache.match(e.request).then(cached => {
+                                    const fetched = fetch(e.request).then(networkResponse => {
+                                        if (networkResponse && networkResponse.status === 200) {
+                                            cache.put(e.request, networkResponse.clone());
+                                        }
+                                        return networkResponse;
+                                    }).catch(err => { 
+                                        // Silently catch offline errors for network fetches, 
+                                        // fallback is strictly 'cached' below.
+                                    });
+                                    return cached || fetched; // Stale-While-Revalidate pattern
+                                });
+                            })
+                        );
+                    });
+                `;
+                const blob = new Blob([swCode], {type: 'application/javascript'});
+                navigator.serviceWorker.register(URL.createObjectURL(blob)).catch(()=>{});
+            }
+        }
+
+        if (navigator.storage && navigator.storage.persist) {
+            navigator.storage.persist().then(granted => {
+                if(granted) console.log("Storage persists");
+            });
+        }
+
+        function safeParse(key, fallback) {
+            try { 
+                const data = JSON.parse(localStorage.getItem(key)); 
+                return (data !== null && data !== undefined) ? data : fallback;
+            } catch(e) { return fallback; }
+        }
+
+        function safeStorageWrite(key, data) {
+            try { 
+                if (typeof data === 'string') localStorage.setItem(key, data);
+                else localStorage.setItem(key, JSON.stringify(data)); 
+                return true;
+            } catch (e) {
+                showToast("Превышен лимит памяти!", "error");
+                return false;
+            }
+        }
+
+        /* ==========================================================================
+           2. GLOBAL STATE ENCAPSULATION
+           ========================================================================== */
+        const AppState = {
+            SQL: null,
+            parsedCards: [],
+            selectedTags: [],
+            compiledBlob: null,
+            finalFilename: '',
+            historyUndo: '',
+            toastTimer: null,
+            inputDebounceTimer: null,
+            presetsDB: safeParse('anki_presets', {}),
+            scrollPosition: 0,
+            isScrollLocked: false,
+            isCompiling: false
+        };
+
+        /* ==========================================================================
+           3. INITIALIZATION & WASM
+           ========================================================================== */
+        document.addEventListener('DOMContentLoaded', () => {
+            initSqlJs({ locateFile: file => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/${file}` })
+                .then(instance => { 
+                    AppState.SQL = instance; 
+                    showToast("System Online: WASM Active", "success");
+                    loadDraft();
+                })
+                .catch(e => showToast("Critical Error: WebAssembly failed", "error"));
+        });
+
+        /* ==========================================================================
+           4. CORE UTILS (Haptics, Toast, Modals, Escaping)
+           ========================================================================== */
+        function doVibrate(ms) { try { if(navigator.vibrate) navigator.vibrate(ms); } catch(e){} }
+
+        function showToast(msg, type='info', allowUndo=false) {
+            const t = document.getElementById('toast');
+            const btn = document.getElementById('toast-undo');
+            document.getElementById('toast-msg').innerText = msg;
+            
+            t.style.borderColor = type === 'error' ? 'var(--danger)' : (type === 'success' ? 'var(--success)' : 'var(--accent)');
+            btn.style.display = allowUndo ? 'block' : 'none';
+            t.classList.add('show');
+            
+            doVibrate(type==='error'?[50,50]:15);
+            clearTimeout(AppState.toastTimer);
+            AppState.toastTimer = setTimeout(() => t.classList.remove('show'), allowUndo ? 6000 : 2500);
+        }
+        
+        function toggleModalScrollLock(isLocked) {
+            if (isLocked && !AppState.isScrollLocked) {
+                AppState.scrollPosition = window.scrollY;
+                document.body.style.position = 'fixed';
+                document.body.style.top = `-${AppState.scrollPosition}px`;
+                document.body.style.width = '100%';
+                AppState.isScrollLocked = true;
+            } else if (!isLocked && AppState.isScrollLocked) {
+                document.body.style.position = '';
+                document.body.style.top = '';
+                document.body.style.width = '';
+                window.scrollTo(0, AppState.scrollPosition);
+                AppState.isScrollLocked = false;
+            }
+        }
+
+        function openModal(id) {
+            document.querySelectorAll('.modal.active').forEach(m => {
+                if (m.id !== id) m.classList.remove('active');
+            });
+            const el = document.getElementById(id);
+            if (!el.classList.contains('active')) {
+                el.classList.add('active');
+                document.body.classList.add('modal-open');
+                toggleModalScrollLock(true);
+                doVibrate(15);
+            }
+        }
+
+        function closeModal(id) {
+            const el = document.getElementById(id);
+            el.classList.remove('active');
+            document.body.classList.remove('modal-open');
+            toggleModalScrollLock(false);
+        }
+
+        function escapeHtml(text) {
+            return String(text).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+        }
+
+        function escapeJs(text) {
+            return String(text).replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r');
+        }
+
+        function escapeAnki(text) {
+            // Anki uses \x1f and \x1e as core record/field separators. We MUST strip them.
+            return String(text).replace(/[\x1f\x1e]/g, ' ');
+        }
+
+        /* ==========================================================================
+           5. SMART INPUT & TOOLS
+           ========================================================================== */
+        function copySystemPrompt() {
+            const prompt = `Твоя роль — эксперт по дидактике (интервальное повторение). Извлеки ключевые факты из текста.
+ПРАВИЛО: Minimum Information Rule (1 факт = 1 карточка).
+ТРЕБОВАНИЯ:
+1. Выведи сырой текст. Без Markdown, таблиц, жирного шрифта.
+2. Формат строго: Вопрос | Ответ
+3. Каждая карточка на новой строке.
+4. Никаких переносов строк внутри вопроса или ответа.`;
+            navigator.clipboard.writeText(prompt).then(() => showToast("Промпт скопирован в буфер", "success"));
+        }
+
+        function toggleTag(el, tag) {
+            el.classList.toggle('active');
+            if (el.classList.contains('active')) {
+                if (!AppState.selectedTags.includes(tag)) AppState.selectedTags.push(tag);
+            } else {
+                AppState.selectedTags = AppState.selectedTags.filter(t => t !== tag);
+            }
+            saveDraft();
+            doVibrate(10);
+        }
+
+        function applyCombo(type) {
+            const ta = document.getElementById('raw-input');
+            let template = "";
+            if (type === 'IT') template = "Что такое HTTP 403? | Ошибка: Доступ запрещен (Forbidden)\nЗа что отвечает DNS? | Преобразует доменные имена в IP-адреса";
+            if (type === 'Lang') template = "Предприниматель (нем.) | der Unternehmer\nРазрабатывать (нем.) | entwickeln";
+            if (type === 'Law') template = "Срок действия ISO 27001 | 3 года\n{{c1::GDPR}} защищает персональные данные граждан ЕС.";
+            
+            if (ta.value.trim() !== "") AppState.historyUndo = ta.value;
+            ta.value = ta.value.trim() + (ta.value.trim() ? "\n" : "") + template;
+            handleInputCore();
+            ta.focus();
+            if (AppState.historyUndo) showToast("Шаблон добавлен", "success", true);
+        }
+
+        function wrapCloze() {
+            const ta = document.getElementById('raw-input');
+            const start = ta.selectionStart;
+            const end = ta.selectionEnd;
+            if (start === end) return showToast("Выдели текст для скрытия!", "warning");
+            
+            const text = ta.value;
+            const selected = text.substring(start, end);
+            ta.value = text.substring(0, start) + `{{c1::${selected}}}` + text.substring(end);
+            
+            ta.focus();
+            ta.setSelectionRange(start, start + selected.length + 8);
+            handleInputCore();
+            doVibrate(15);
+        }
+
+        function clearInput() {
+            const ta = document.getElementById('raw-input');
+            if(!ta.value.trim()) return showToast("Уже очищено", "warning"); // Protect history
+            AppState.historyUndo = ta.value;
+            ta.value = '';
+            handleInputCore();
+            showToast("Массив очищен", "info", true);
+        }
+
+        function undoAction() {
+            if(AppState.historyUndo) {
+                document.getElementById('raw-input').value = AppState.historyUndo;
+                handleInputCore();
+                AppState.historyUndo = '';
+                document.getElementById('toast').classList.remove('show');
+                doVibrate(15);
+            }
+        }
+
+        function handleDeckNameChange() {
+            saveDraft();
+            const el = document.getElementById('deck-name');
+            el.style.borderColor = 'var(--success)';
+            setTimeout(() => el.style.borderColor = '', 500);
+        }
+
+        /* ==========================================================================
+           6. AUTO-PARSER & LIVE PREVIEW
+           ========================================================================== */
+        function debouncedHandleInput() {
+            if (AppState.isCompiling) return;
+            
+            clearTimeout(AppState.inputDebounceTimer);
+            AppState.inputDebounceTimer = setTimeout(() => {
+                handleInputCore();
+                
+                // Invalidate compiled archive if user keeps typing
+                if (AppState.compiledBlob) {
+                    AppState.compiledBlob = null;
+                    const btn = document.getElementById('btn-compile');
+                    btn.onclick = compileAnkiDeck;
+                    document.getElementById('compile-text').innerText = "Скомпилировать";
+                    document.getElementById('btn-share').disabled = true;
+                }
+            }, 300); 
+        }
+
+        function handleInputCore() {
+            saveDraft();
+            parseData(document.getElementById('raw-input').value);
+            renderPreview();
+            updateGlow();
+        }
+
+        function parseData(text) {
+            AppState.parsedCards = [];
+            const lines = text.split('\n');
+            
+            lines.forEach((line, index) => {
+                let cleanLine = line.trim();
+                if (!cleanLine) return;
+                
+                let isCloze = cleanLine.includes('{{c') && cleanLine.includes('::') && cleanLine.includes('}}');
+
+                // Detect delimiter dynamically (Safeguard Cloze cards from false splits)
+                let delim = '\t';
+                if (cleanLine.includes('|')) delim = '|';
+                else if (cleanLine.includes(';') && !isCloze) delim = ';';
+                else if (cleanLine.includes(',') && !isCloze) delim = ',';
+                else if (cleanLine.includes(':') && !isCloze) delim = ':';
+
+                if (isCloze && !cleanLine.includes(delim)) {
+                    AppState.parsedCards.push({ front: cleanLine, back: '', type: 'cloze', error: null, lineIdx: index });
+                } else {
+                    let parts = cleanLine.split(delim);
+                    if (parts.length >= 2) {
+                        let q = parts[0].trim();
+                        let a = parts.slice(1).join(delim).trim();
+                        if (!q) {
+                            AppState.parsedCards.push({ front: cleanLine, back: '', type: 'error', error: "Синтаксис: пустой Вопрос (Front)", lineIdx: index });
+                            return;
+                        }
+                        if (!a && !isCloze) {
+                            AppState.parsedCards.push({ front: cleanLine, back: '', type: 'error', error: "Синтаксис: пустой Ответ (Back)", lineIdx: index });
+                            return;
+                        }
+                        let err = q.length > 150 ? "Overload: слишком длинный вопрос (>150 симв)" : null;
+                        AppState.parsedCards.push({ front: q, back: a, type: isCloze ? 'cloze' : 'basic', error: err, lineIdx: index });
+                    } else {
+                        AppState.parsedCards.push({ front: cleanLine, back: '', type: 'error', error: "Синтаксис: нет ответа или разделителя", lineIdx: index });
+                    }
+                }
+            });
+            
+            // Re-render button state
+            const validCount = AppState.parsedCards.filter(c => !c.error && c.type !== 'error').length;
+            const btn = document.getElementById('btn-compile');
+            if (validCount > 0 && AppState.SQL && !AppState.compiledBlob) {
+                btn.disabled = false;
+                document.getElementById('compile-stats').innerText = `${validCount} карт готовы`;
+            } else if (!AppState.compiledBlob) {
+                btn.disabled = true;
+                document.getElementById('compile-stats').innerText = "Ожидание...";
+            }
+        }
+
+        function formatClozePreview(text) {
+            return text.replace(/\{\{c\d+::(.*?)\}\}/g, '<span class="cloze-mark">[$1]</span>');
+        }
+
+        function renderPreview() {
+            const grid = document.getElementById('preview-grid');
+            const validCount = AppState.parsedCards.filter(c => !c.error && c.type !== 'error').length;
+            document.getElementById('valid-count').innerText = validCount;
+
+            if(AppState.parsedCards.length === 0) {
+                grid.innerHTML = '<div style="text-align:center; color:var(--border); font-size:12px; margin-top:20px;">Ожидание данных...</div>';
+                return;
+            }
+
+            let html = '';
+            // Жесткий лимит визуала во избежание Memory Leak и фризов на мобилках
+            const MAX_PREVIEW = 50;
+            const cardsToRender = AppState.parsedCards.slice(0, MAX_PREVIEW);
+
+            cardsToRender.forEach(c => {
+                let errHtml = c.error ? `<div class="err-label">${c.error}</div>` : '';
+                let borderClass = c.error ? 'card-error' : '';
+                
+                let fText = escapeHtml(c.front);
+                let bText = escapeHtml(c.back);
+                
+                if (c.type === 'cloze') {
+                    fText = formatClozePreview(fText);
+                    bText = bText ? `<br><small style="color:var(--text-muted)">Extra: ${bText}</small>` : '';
+                }
+
+                html += `
+                    <div class="scene">
+                        <div class="card-3d" onclick="this.classList.toggle('flipped'); doVibrate(5)">
+                            <div class="card-face ${borderClass}">
+                                <div class="card-content-wrapper">
+                                    <div class="card-text">${fText}</div>
+                                    ${errHtml}
+                                </div>
+                            </div>
+                            <div class="card-face card-back">
+                                <div class="card-content-wrapper">
+                                    <div class="card-text" style="color:var(--success)">
+                                        ${c.type === 'cloze' ? formatClozePreview(escapeHtml(c.front)) + bText : bText}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            });
+
+            if (AppState.parsedCards.length > MAX_PREVIEW) {
+                html += `<div style="text-align:center; color:var(--text-muted); font-size:12px; padding: 15px;">Показаны первые ${MAX_PREVIEW} карточек. Скомпилированы будут все ${AppState.parsedCards.length}.</div>`;
+            }
+
+            grid.innerHTML = html;
+        }
+
+        function updateGlow() {
+            const glow = document.getElementById('ambient-glow');
+            const errors = AppState.parsedCards.filter(c => c.error).length;
+            const valid = AppState.parsedCards.filter(c => !c.error && c.type !== 'error').length;
+
+            if (errors > 0) glow.style.background = `radial-gradient(circle at 50% 30%, rgba(248,81,73,0.15) 0%, transparent 60%)`;
+            else if (valid > 0) glow.style.background = `radial-gradient(circle at 50% 30%, rgba(57,211,83,0.12) 0%, transparent 60%)`;
+            else glow.style.background = `radial-gradient(circle at 50% 30%, var(--glow-color) 0%, transparent 60%)`;
+        }
+
+        /* ==========================================================================
+           7. MODALS: DB MANAGER, PRESETS, BACKUP
+           ========================================================================== */
+        function openDbManager(keepScroll = false) {
+            const list = document.getElementById('db-list');
+            const currentScroll = keepScroll ? list.scrollTop : 0;
+            
+            let html = '';
+            AppState.parsedCards.forEach((c, idx) => {
+                if(!c.error && c.type !== 'error') {
+                    html += `
+                        <div class="db-row">
+                            <div class="db-text">${escapeHtml(c.front)}</div>
+                            <button class="btn-modal-del" onclick="removeCardFromDb(${idx})">✕</button>
+                        </div>
+                    `;
+                }
+            });
+            list.innerHTML = html || '<div style="text-align:center; color:var(--text-muted); font-size:12px;">Пусто</div>';
+            
+            if (keepScroll) list.scrollTop = currentScroll;
+        }
+
+        function removeCardFromDb(parsedIdx) {
+            const card = AppState.parsedCards[parsedIdx];
+            if (!card || card.lineIdx === undefined) return;
+            
+            const lines = document.getElementById('raw-input').value.split('\n');
+            lines.splice(card.lineIdx, 1);
+            document.getElementById('raw-input').value = lines.join('\n');
+            
+            handleInputCore();
+            openDbManager(true); // Re-render list accurately and preserve scroll
+            doVibrate(15);
+        }
+
+        function openPresetsManager() {
+            const list = document.getElementById('presets-list');
+            let html = '';
+            for (let p in AppState.presetsDB) {
+                html += `
+                    <div class="db-row">
+                        <div class="db-text">${escapeHtml(p)}</div>
+                        <div style="display:flex; gap:5px;">
+                            <button class="btn-modal-load" onclick="loadPreset('${escapeJs(p)}')">Загрузить</button>
+                            <button class="btn-modal-del" onclick="deletePreset('${escapeJs(p)}')">✕</button>
+                        </div>
+                    </div>
+                `;
+            }
+            list.innerHTML = html || '<div style="text-align:center; color:var(--text-muted); font-size:12px;">Нет сохраненных шаблонов</div>';
+        }
+
+        function savePreset() {
+            const name = document.getElementById('preset-name').value.trim();
+            const text = document.getElementById('raw-input').value.trim();
+            if(!name || !text) return showToast("Имя или поле ввода пустое", "warning");
+            
+            AppState.presetsDB[name] = { text: text, deck: document.getElementById('deck-name').value };
+            safeStorageWrite('anki_presets', AppState.presetsDB);
+            document.getElementById('preset-name').value = '';
+            openPresetsManager();
+            showToast("Сохранено", "success");
+        }
+
+        function loadPreset(name) {
+            if(!AppState.presetsDB[name]) return;
+            AppState.historyUndo = document.getElementById('raw-input').value;
+            document.getElementById('raw-input').value = AppState.presetsDB[name].text;
+            document.getElementById('deck-name').value = AppState.presetsDB[name].deck || "Корпоративный Инбокс";
+            handleInputCore();
+            closeModal('presets-modal');
+            showToast("Загружено", "info", true);
+        }
+
+        function deletePreset(name) {
+            if(!AppState.presetsDB[name]) return;
+            if(confirm(`Удалить "${name}"?`)) {
+                delete AppState.presetsDB[name];
+                safeStorageWrite('anki_presets', AppState.presetsDB);
+                openPresetsManager();
+            }
+        }
+
+        function exportJson() {
+            const draftValue = localStorage.getItem('anki_draft') || '';
+            const data = { presets: AppState.presetsDB, draft: draftValue };
+            const blob = new Blob([JSON.stringify(data, null, 2)], {type: "application/json"});
+            const link = document.createElement('a');
+            const url = URL.createObjectURL(blob);
+            link.href = url;
+            link.download = `AnkiPro_Backup_${new Date().toISOString().split('T')[0]}.json`;
+            link.click();
+            setTimeout(() => URL.revokeObjectURL(url), 5000);
+            showToast("Бэкап скачан", "success");
+        }
+
+        function importJson(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = function(evt) {
+                try {
+                    const data = JSON.parse(evt.target.result);
+                    if(data.presets) {
+                        AppState.presetsDB = data.presets;
+                        safeStorageWrite('anki_presets', AppState.presetsDB);
+                    }
+                    showToast("Восстановлено", "success");
+                    closeModal('backup-modal');
+                } catch (err) { 
+                    showToast("Ошибка файла", "error"); 
+                } finally {
+                    e.target.value = ''; // Защита от Input File Deadlock
+                }
+            };
+            reader.readAsText(file);
+        }
+
+        /* ==========================================================================
+           8. CORE: ANKI WEBASSEMBLY COMPILER (.APKG)
+           ========================================================================== */
+        function saveDraft() {
+            safeStorageWrite('anki_draft', document.getElementById('raw-input').value);
+            safeStorageWrite('anki_deck', document.getElementById('deck-name').value);
+            safeStorageWrite('anki_tags', AppState.selectedTags);
+        }
+
+        function loadDraft() {
+            const draft = localStorage.getItem('anki_draft') || '';
+            const deck = safeParse('anki_deck', null) || localStorage.getItem('anki_deck');
+            const tags = safeParse('anki_tags', []);
+            
+            if (deck) document.getElementById('deck-name').value = deck;
+            if (draft) { document.getElementById('raw-input').value = draft; handleInputCore(); }
+            
+            // Тихо применяем теги к UI без вызова лишних вибраций и сохранений
+            AppState.selectedTags = tags; 
+            tags.forEach(t => {
+                const el = Array.from(document.querySelectorAll('.chip')).find(chip => chip.innerText === `#${t}`);
+                if (el && !el.classList.contains('active')) el.classList.add('active');
+            });
+        }
+
+        function simpleHash(str) {
+            let hash = 0;
+            for (let i = 0; i < str.length; i++) hash = (hash << 5) - hash + str.charCodeAt(i) | 0;
+            return Math.abs(hash);
+        }
+
+        function generateGuid() {
+            return 'xxxxxxxxx'.replace(/[x]/g, () => (Math.random() * 36 | 0).toString(36));
+        }
+
+        async function compileAnkiDeck() {
+            if (AppState.isCompiling) return;
+            if (!AppState.SQL) return showToast("WASM не инициализирован", "error");
+            
+            const validCards = AppState.parsedCards.filter(c => !c.error && c.type !== 'error');
+            if (validCards.length === 0) return;
+
+            AppState.isCompiling = true;
+
+            const rawDeckName = document.getElementById('deck-name').value.trim() || 'Инбокс';
+            const deckName = escapeAnki(rawDeckName); // Защита от \x1f инъекций в названии
+
+            const btn = document.getElementById('btn-compile');
+            btn.disabled = true;
+            document.getElementById('compile-text').innerText = "Компиляция...";
+            doVibrate(30);
+
+            let db = null;
+            try {
+                // Создаем in-memory базу
+                db = new AppState.SQL.Database();
+                
+                db.run(`
+                    CREATE TABLE col (id integer primary key, crt integer not null, mod integer not null, scm integer not null, ver integer not null, dconf text not null, decks text not null, models text not null, conf text not null);
+                    CREATE TABLE notes (id integer primary key, guid text not null, mid integer not null, mod integer not null, usn integer not null, tags text not null, flds text not null, sfld integer not null, csum integer not null, flags integer not null, data text not null);
+                    CREATE TABLE cards (id integer primary key, nid integer not null, did integer not null, ord integer not null, mod integer not null, usn integer not null, type integer not null, queue integer not null, due integer not null, ivl integer not null, factor integer not null, reps integer not null, lapses integer not null, left integer not null, odue integer not null, odid integer not null, flags integer not null, data text not null);
+                `);
+
+                const nowSec = Math.floor(Date.now() / 1000);
+                const deckId = 1600000000 + Math.floor(Math.random()*10000);
+                const basicMid = 1000; const clozeMid = 2000;
+                const tagsStr = AppState.selectedTags.length > 0 ? ` ${AppState.selectedTags.join(' ')} ` : "";
+
+                // Минимизированный JSON для схем Anki (Экономим RAM и место)
+                const modelsJson = {
+                    "1000": { id: basicMid, name: "Pro Basic", type: 0, mod: nowSec, usn: -1, sortf: 0, did: deckId, tmpls: [{ name: "Card 1", ord: 0, qfmt: "<div class='c'>{{Front}}</div>", afmt: "<div class='c'>{{Front}}<hr>{{Back}}</div>", did: null }], flds: [{ name: "Front", ord: 0, sticky: false, rtl: false, font: "Arial", size: 20 }, { name: "Back", ord: 1, sticky: false, rtl: false, font: "Arial", size: 20 }], css: ".card { font-family: sans-serif; text-align: center; color: #c9d1d9; background: #0d1117; } .c { background: #161b22; padding: 20px; border-radius: 12px; border: 1px solid #30363d; margin: 10px; } hr { border: 0; border-top: 1px solid #30363d; margin: 15px 0; }", tags: [] },
+                    "2000": { id: clozeMid, name: "Pro Cloze", type: 1, mod: nowSec, usn: -1, sortf: 0, did: deckId, tmpls: [{ name: "Cloze", ord: 0, qfmt: "<div class='c'>{{cloze:Text}}</div>", afmt: "<div class='c'>{{cloze:Text}}<hr>{{Back Extra}}</div>", did: null }], flds: [{ name: "Text", ord: 0, sticky: false, rtl: false, font: "Arial", size: 20 }, { name: "Back Extra", ord: 1, sticky: false, rtl: false, font: "Arial", size: 20 }], css: ".card { font-family: sans-serif; text-align: center; color: #c9d1d9; background: #0d1117; } .c { background: #161b22; padding: 20px; border-radius: 12px; border: 1px solid #30363d; margin: 10px; } hr { border: 0; border-top: 1px solid #30363d; margin: 15px 0; } .cloze { color: #58a6ff; font-weight: bold; }", tags: [] }
+                };
+
+                const decksJson = { "1": { id: 1, mod: 0, name: "Default", usn: 0, lrnToday: [0,0], revToday: [0,0], newToday: [0,0], timeToday: [0,0], collapsed: false, browserCollapsed: false, desc: "", dyn: 0, conf: 1, extendNew: 10, extendRev: 50 } };
+                decksJson[deckId] = { id: deckId, mod: nowSec, name: deckName, usn: -1, lrnToday: [0,0], revToday: [0,0], newToday: [0,0], timeToday: [0,0], collapsed: false, browserCollapsed: false, desc: "", dyn: 0, conf: 1, extendNew: 10, extendRev: 50 };
+
+                const dconfJson = { "1": { id: 1, mod: 0, name: "Default", usn: 0, maxTaken: 60, autoplay: true, timer: 0, replayq: true, new: { delays: [1, 10], separate: true, ints: [1, 4, 7], initialFactor: 2500, perDay: 20, order: 1 }, rev: { perDay: 200, ease4: 1.3, fuzz: 0.05, minSpace: 1, ivlFct: 1, maxIvl: 36500, bury: false }, lapse: { delays: [10], mult: 0, minInt: 1, leechFct: 8, leechAction: 0 } } };
+                const confJson = { nextPos: 1, estTimes: true, activeDecks: [1], sortType: "noteFld", timeLim: 0, sortBackwards: false, addToCur: true, curDeck: deckId, newBury: true, newSpread: 0, dueCounts: true, curModel: basicMid, collapseTime: 1200 };
+
+                db.run(`INSERT INTO col VALUES (1, ${nowSec}, ${Date.now()}, ${Date.now()}, 11, ?, ?, ?, ?);`, [JSON.stringify(dconfJson), JSON.stringify(decksJson), JSON.stringify(modelsJson), JSON.stringify(confJson)]);
+
+                const baseTime = Date.now() * 1000; // Protection against ID collisions
+                
+                validCards.forEach((c, idx) => {
+                    const noteId = baseTime + idx;
+                    const cardId = noteId + 10000;
+                    const guid = generateGuid();
+                    
+                    // Безопасность: очистка фронта/бэка от спецсимволов Anki, чтобы не сломать SQLite
+                    const cleanFront = escapeAnki(c.front);
+                    const cleanBack = escapeAnki(c.back);
+                    const flds = `${cleanFront}\x1f${cleanBack}`;
+                    const mid = c.type === 'cloze' ? clozeMid : basicMid;
+
+                    db.run(`INSERT INTO notes VALUES (?, ?, ?, ?, -1, ?, ?, ?, ?, 0, '');`, [noteId, guid, mid, nowSec, tagsStr, flds, cleanFront, simpleHash(cleanFront)]);
+
+                    let ordList = [0];
+                    if (c.type === 'cloze') {
+                        let match = c.front.match(/\{\{c(\d+)::/g);
+                        if (match) {
+                            let uniq = [...new Set(match.map(m => parseInt(m.replace(/[^0-9]/g,'')) - 1))];
+                            if(uniq.length > 0) ordList = uniq;
+                        }
+                    }
+
+                    ordList.forEach(ord => {
+                        db.run(`INSERT INTO cards VALUES (?, ?, ?, ?, ?, -1, 0, 0, ?, 0, 0, 0, 0, 0, 0, 0, 0, '');`, [cardId + ord, noteId, deckId, ord, nowSec, idx + 1]);
+                    });
+                });
+
+                // Архивация JSZip
+                const binaryDb = db.export();
+                const zip = new JSZip();
+                zip.file("collection.anki2", binaryDb);
+                zip.file("media", "{}");
+
+                AppState.compiledBlob = await zip.generateAsync({ type: "blob" });
+                AppState.finalFilename = `${deckName.replace(/[^a-zA-Z0-9а-яА-Я_-]/g, '_')}.apkg`;
+
+                document.getElementById('compile-stats').innerText = `${(AppState.compiledBlob.size / 1024).toFixed(1)} KB`;
+                document.getElementById('compile-text').innerText = "⬇ Скачать .apkg";
+                document.getElementById('btn-share').disabled = false;
+                
+                showToast("Архив успешно скомпилирован!", "success");
+                if (typeof confetti === 'function') confetti({ particleCount: 100, spread: 70, origin: { y: 0.8 }, colors: ['#39d353', '#58a6ff'] });
+                
+                btn.onclick = () => downloadApkg(); // Меняем логику кнопки
+
+            } catch (err) {
+                console.error(err);
+                showToast('Ошибка компиляции SQLite', 'error');
+            } finally {
+                // КРИТИЧЕСКИ ВАЖНО: Очищаем память C++ (WebAssembly) во избежание Memory Leak
+                if (db) db.free();
+                AppState.isCompiling = false;
+                btn.disabled = false;
+            }
+        }
+
+        function downloadApkg() {
+            if (!AppState.compiledBlob) return;
+            const link = document.createElement('a');
+            const url = URL.createObjectURL(AppState.compiledBlob);
+            link.href = url;
+            link.download = AppState.finalFilename;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            
+            showToast("Скачивание началось...", "success");
+
+            // Защита от Memory Leak: Очищаем Blob из памяти с паузой на начало скачивания
+            setTimeout(() => URL.revokeObjectURL(url), 10000);
+            
+            // Сброс кнопки
+            const btn = document.getElementById('btn-compile');
+            btn.onclick = compileAnkiDeck;
+            document.getElementById('compile-text').innerText = "Скомпилировать";
+            doVibrate(20);
+        }
+
+        async function shareApkg() {
+            if (!AppState.compiledBlob) return;
+            const file = new File([AppState.compiledBlob], AppState.finalFilename, { type: "application/octet-stream" });
+            
+            // Безопасный вызов Share API
+            if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+                try {
+                    await navigator.share({ files: [file], title: 'Anki Pro Deck', text: 'Сборка карточек готова.' });
+                    doVibrate(30);
+                } catch (err) {
+                    if (err.name !== 'AbortError') showToast("Система Share отменила действие", "error");
+                }
+            } else {
+                showToast("Ваш браузер не поддерживает Share File API", "warning");
+            }
+        }
+    </script>
+</body>
+</html>
