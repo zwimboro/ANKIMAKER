@@ -132,7 +132,7 @@
         .btn-action:disabled { background: var(--border); color: var(--text-muted); cursor: not-allowed; }
         .btn-icon.danger { color: var(--danger); background: rgba(248, 81, 73, 0.1); border-color: rgba(248, 81, 73, 0.2); }
 
-        /* Dynamic Morphing Toast - z-index increased to prevent modal overlap */
+        /* Dynamic Morphing Toast */
         .toast { 
             position: fixed; top: -80px; left: 50%; transform: translateX(-50%); background: #000; color: #fff; padding: 10px 20px; border-radius: 30px; font-size: 13px; font-weight: bold; 
             display: flex; align-items: center; gap: 12px; z-index: 3000; transition: all 0.5s cubic-bezier(0.68, -0.55, 0.265, 1.55); box-shadow: 0 10px 25px rgba(0,0,0,0.6); border: 1px solid rgba(255,255,255,0.1);
@@ -214,7 +214,8 @@
     <!-- Bottom Action Bar -->
     <div class="bottom-bar">
         <button class="icon-btn danger" onclick="clearInput()" title="Очистить всё">🗑️</button>
-        <button class="btn-action" id="btn-compile" disabled onclick="compileAnkiDeck()">
+        <!-- Единая кнопка, логика управляется стейт-машиной в JS -->
+        <button class="btn-action" id="btn-compile" disabled onclick="handleMainAction()">
             <span id="compile-text">Скомпилировать</span>
             <span class="sub" id="compile-stats">Ожидание...</span>
         </button>
@@ -264,76 +265,11 @@
         /* ==========================================================================
            1. PWA & STORAGE ARMOR (Pro-Diet OS Standards)
            ========================================================================== */
-        const SW_VERSION = 'v10';
+        // Для поддержки кэша создайте стандартный sw.js файл в корне проекта.
         if ('serviceWorker' in navigator && location.protocol !== 'file:') {
-            const currentSwVer = localStorage.getItem('anki_sw_ver');
-            
-            if (currentSwVer !== SW_VERSION) {
-                // Hard upgrade pattern for blob-based inline SW
-                navigator.serviceWorker.getRegistrations().then(regs => {
-                    Promise.all(regs.map(r => r.unregister())).then(() => {
-                        localStorage.setItem('anki_sw_ver', SW_VERSION);
-                        registerSW();
-                    });
-                });
-            } else {
-                navigator.serviceWorker.getRegistrations().then(regs => {
-                    if (regs.length === 0) registerSW();
-                });
-            }
-
-            function registerSW() {
-                const swCode = `
-                    const CACHE = 'anki-pro-${SW_VERSION}';
-                    const APP_ORIGIN = '${location.origin}';
-                    const ASSETS = [
-                        APP_ORIGIN + location.pathname,
-                        'https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/sql-wasm.js',
-                        'https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/sql-wasm.wasm',
-                        'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js',
-                        'https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js'
-                    ];
-
-                    self.addEventListener('install', e => {
-                        self.skipWaiting();
-                        e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS)));
-                    });
-
-                    self.addEventListener('activate', e => {
-                        e.waitUntil(
-                            caches.keys().then(keys => Promise.all(
-                                keys.map(k => k !== CACHE ? caches.delete(k) : null)
-                            )).then(() => self.clients.claim())
-                        );
-                    });
-
-                    self.addEventListener('fetch', e => {
-                        const url = new URL(e.request.url);
-                        // Security: Block caching of non-HTTP and unverified third-party domains
-                        if (e.request.method !== 'GET' || !e.request.url.startsWith('http')) return;
-                        if (url.origin !== APP_ORIGIN && !url.hostname.includes('cloudflare.com') && !url.hostname.includes('jsdelivr.net')) return;
-                        
-                        e.respondWith(
-                            caches.open(CACHE).then(cache => {
-                                return cache.match(e.request).then(cached => {
-                                    const fetched = fetch(e.request).then(networkResponse => {
-                                        if (networkResponse && networkResponse.status === 200) {
-                                            cache.put(e.request, networkResponse.clone());
-                                        }
-                                        return networkResponse;
-                                    }).catch(err => { 
-                                        // Silently catch offline errors for network fetches, 
-                                        // fallback is strictly 'cached' below.
-                                    });
-                                    return cached || fetched; // Stale-While-Revalidate pattern
-                                });
-                            })
-                        );
-                    });
-                `;
-                const blob = new Blob([swCode], {type: 'application/javascript'});
-                navigator.serviceWorker.register(URL.createObjectURL(blob)).catch(()=>{});
-            }
+            navigator.serviceWorker.register('sw.js').catch(() => {
+                console.warn('PWA: Service Worker file "sw.js" not found. Running in online-only mode.');
+            });
         }
 
         if (navigator.storage && navigator.storage.persist) {
@@ -365,30 +301,50 @@
            ========================================================================== */
         const AppState = {
             SQL: null,
+            sqlFailed: false,
             parsedCards: [],
             selectedTags: [],
             compiledBlob: null,
+            compiledDataUrl: null, 
             finalFilename: '',
-            historyUndo: '',
+            historyUndo: null, 
             toastTimer: null,
             inputDebounceTimer: null,
             presetsDB: safeParse('anki_presets', {}),
             scrollPosition: 0,
             isScrollLocked: false,
-            isCompiling: false
+            isCompiling: false,
+            needsReparse: false,
+            isDownloading: false
         };
 
         /* ==========================================================================
            3. INITIALIZATION & WASM
            ========================================================================== */
         document.addEventListener('DOMContentLoaded', () => {
+            if (typeof initSqlJs !== 'function') {
+                showToast("Сетевая блокировка: SQLite недоступен", "error");
+                AppState.sqlFailed = true;
+                return;
+            }
             initSqlJs({ locateFile: file => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/${file}` })
                 .then(instance => { 
                     AppState.SQL = instance; 
                     showToast("System Online: WASM Active", "success");
                     loadDraft();
                 })
-                .catch(e => showToast("Critical Error: WebAssembly failed", "error"));
+                .catch(e => {
+                    showToast("Critical Error: WebAssembly failed", "error");
+                    AppState.sqlFailed = true;
+                });
+        });
+
+        /* АВАРИЙНЫЙ СБРОС (Emergency Flush) при закрытии вкладки */
+        window.addEventListener('beforeunload', () => {
+            const ta = document.getElementById('raw-input');
+            if (ta) localStorage.setItem('anki_draft', ta.value);
+            const dn = document.getElementById('deck-name');
+            if (dn) localStorage.setItem('anki_deck', dn.value);
         });
 
         /* ==========================================================================
@@ -455,7 +411,6 @@
         }
 
         function escapeAnki(text) {
-            // Anki uses \x1f and \x1e as core record/field separators. We MUST strip them.
             return String(text).replace(/[\x1f\x1e]/g, ' ');
         }
 
@@ -480,7 +435,7 @@
             } else {
                 AppState.selectedTags = AppState.selectedTags.filter(t => t !== tag);
             }
-            saveDraft();
+            safeStorageWrite('anki_tags', AppState.selectedTags);
             doVibrate(10);
         }
 
@@ -491,11 +446,11 @@
             if (type === 'Lang') template = "Предприниматель (нем.) | der Unternehmer\nРазрабатывать (нем.) | entwickeln";
             if (type === 'Law') template = "Срок действия ISO 27001 | 3 года\n{{c1::GDPR}} защищает персональные данные граждан ЕС.";
             
-            if (ta.value.trim() !== "") AppState.historyUndo = ta.value;
+            AppState.historyUndo = ta.value; 
             ta.value = ta.value.trim() + (ta.value.trim() ? "\n" : "") + template;
             handleInputCore();
             ta.focus();
-            if (AppState.historyUndo) showToast("Шаблон добавлен", "success", true);
+            showToast("Шаблон добавлен", "success", true);
         }
 
         function wrapCloze() {
@@ -504,6 +459,7 @@
             const end = ta.selectionEnd;
             if (start === end) return showToast("Выдели текст для скрытия!", "warning");
             
+            AppState.historyUndo = ta.value; 
             const text = ta.value;
             const selected = text.substring(start, end);
             ta.value = text.substring(0, start) + `{{c1::${selected}}}` + text.substring(end);
@@ -512,11 +468,12 @@
             ta.setSelectionRange(start, start + selected.length + 8);
             handleInputCore();
             doVibrate(15);
+            showToast("Скрыто (Cloze)", "success", true);
         }
 
         function clearInput() {
             const ta = document.getElementById('raw-input');
-            if(!ta.value.trim()) return showToast("Уже очищено", "warning"); // Protect history
+            if(!ta.value.trim()) return showToast("Уже очищено", "warning"); 
             AppState.historyUndo = ta.value;
             ta.value = '';
             handleInputCore();
@@ -524,37 +481,57 @@
         }
 
         function undoAction() {
-            if(AppState.historyUndo) {
+            if(AppState.historyUndo !== null) {
                 document.getElementById('raw-input').value = AppState.historyUndo;
                 handleInputCore();
-                AppState.historyUndo = '';
+                AppState.historyUndo = null; 
                 document.getElementById('toast').classList.remove('show');
                 doVibrate(15);
+                
+                if (document.getElementById('db-modal').classList.contains('active')) {
+                    openDbManager(true);
+                }
             }
         }
 
         function handleDeckNameChange() {
-            saveDraft();
             const el = document.getElementById('deck-name');
+            localStorage.setItem('anki_deck', el.value); // Прямая легкая запись
             el.style.borderColor = 'var(--success)';
             setTimeout(() => el.style.borderColor = '', 500);
         }
 
         /* ==========================================================================
-           6. AUTO-PARSER & LIVE PREVIEW
+           6. STATE MACHINE (Main Button)
+           ========================================================================== */
+        async function handleMainAction() {
+            if (AppState.isCompiling || AppState.isDownloading || AppState.sqlFailed) return;
+
+            if (AppState.compiledDataUrl) {
+                downloadApkg();
+            } else {
+                await compileAnkiDeck();
+            }
+        }
+
+        /* ==========================================================================
+           7. AUTO-PARSER & LIVE PREVIEW
            ========================================================================== */
         function debouncedHandleInput() {
-            if (AppState.isCompiling) return;
-            
             clearTimeout(AppState.inputDebounceTimer);
             AppState.inputDebounceTimer = setTimeout(() => {
+                // Если юзер печатает во время сборки — ставим в очередь перерасчета
+                if (AppState.isCompiling) {
+                    AppState.needsReparse = true;
+                    return;
+                }
+
                 handleInputCore();
                 
-                // Invalidate compiled archive if user keeps typing
-                if (AppState.compiledBlob) {
+                // Инвалидация старого кэша
+                if (AppState.compiledBlob || AppState.compiledDataUrl) {
                     AppState.compiledBlob = null;
-                    const btn = document.getElementById('btn-compile');
-                    btn.onclick = compileAnkiDeck;
+                    AppState.compiledDataUrl = null;
                     document.getElementById('compile-text').innerText = "Скомпилировать";
                     document.getElementById('btn-share').disabled = true;
                 }
@@ -562,8 +539,11 @@
         }
 
         function handleInputCore() {
-            saveDraft();
-            parseData(document.getElementById('raw-input').value);
+            // Сохраняем черновик только внутри защищенного таймера
+            const ta = document.getElementById('raw-input');
+            localStorage.setItem('anki_draft', ta.value); 
+
+            parseData(ta.value);
             renderPreview();
             updateGlow();
         }
@@ -574,11 +554,9 @@
             
             lines.forEach((line, index) => {
                 let cleanLine = line.trim();
-                if (!cleanLine) return;
+                if (!cleanLine) return; 
                 
                 let isCloze = cleanLine.includes('{{c') && cleanLine.includes('::') && cleanLine.includes('}}');
-
-                // Detect delimiter dynamically (Safeguard Cloze cards from false splits)
                 let delim = '\t';
                 if (cleanLine.includes('|')) delim = '|';
                 else if (cleanLine.includes(';') && !isCloze) delim = ';';
@@ -593,35 +571,37 @@
                         let q = parts[0].trim();
                         let a = parts.slice(1).join(delim).trim();
                         if (!q) {
-                            AppState.parsedCards.push({ front: cleanLine, back: '', type: 'error', error: "Синтаксис: пустой Вопрос (Front)", lineIdx: index });
+                            AppState.parsedCards.push({ front: cleanLine, back: '', type: 'error', error: "Пустой вопрос", lineIdx: index });
                             return;
                         }
                         if (!a && !isCloze) {
-                            AppState.parsedCards.push({ front: cleanLine, back: '', type: 'error', error: "Синтаксис: пустой Ответ (Back)", lineIdx: index });
+                            AppState.parsedCards.push({ front: cleanLine, back: '', type: 'error', error: "Пустой ответ", lineIdx: index });
                             return;
                         }
-                        let err = q.length > 150 ? "Overload: слишком длинный вопрос (>150 симв)" : null;
+                        let err = q.length > 150 ? "Overload: вопрос >150 симв" : null;
                         AppState.parsedCards.push({ front: q, back: a, type: isCloze ? 'cloze' : 'basic', error: err, lineIdx: index });
                     } else {
-                        AppState.parsedCards.push({ front: cleanLine, back: '', type: 'error', error: "Синтаксис: нет ответа или разделителя", lineIdx: index });
+                        AppState.parsedCards.push({ front: cleanLine, back: '', type: 'error', error: "Синтаксис: нет разделителя", lineIdx: index });
                     }
                 }
             });
             
-            // Re-render button state
             const validCount = AppState.parsedCards.filter(c => !c.error && c.type !== 'error').length;
             const btn = document.getElementById('btn-compile');
-            if (validCount > 0 && AppState.SQL && !AppState.compiledBlob) {
+            if (validCount > 0 && AppState.SQL && !AppState.compiledDataUrl && !AppState.sqlFailed) {
                 btn.disabled = false;
                 document.getElementById('compile-stats').innerText = `${validCount} карт готовы`;
-            } else if (!AppState.compiledBlob) {
+            } else if (!AppState.compiledDataUrl) {
                 btn.disabled = true;
-                document.getElementById('compile-stats').innerText = "Ожидание...";
+                document.getElementById('compile-stats').innerText = AppState.sqlFailed ? "ОШИБКА WASM" : "Ожидание...";
             }
         }
 
-        function formatClozePreview(text) {
-            return text.replace(/\{\{c\d+::(.*?)\}\}/g, '<span class="cloze-mark">[$1]</span>');
+        function formatClozePreview(text, isBack = false) {
+            return text.replace(/\{\{c\d+::(.*?)(?:::(.*?))?\}\}/g, (match, p1, p2) => {
+                if (isBack) return `<span class="cloze-mark">${p1}</span>`;
+                return `<span class="cloze-mark">[${p2 ? p2 : '...'}]</span>`;
+            });
         }
 
         function renderPreview() {
@@ -635,7 +615,6 @@
             }
 
             let html = '';
-            // Жесткий лимит визуала во избежание Memory Leak и фризов на мобилках
             const MAX_PREVIEW = 50;
             const cardsToRender = AppState.parsedCards.slice(0, MAX_PREVIEW);
 
@@ -645,10 +624,12 @@
                 
                 let fText = escapeHtml(c.front);
                 let bText = escapeHtml(c.back);
+                let cBackText = bText;
                 
                 if (c.type === 'cloze') {
-                    fText = formatClozePreview(fText);
+                    fText = formatClozePreview(escapeHtml(c.front), false);
                     bText = bText ? `<br><small style="color:var(--text-muted)">Extra: ${bText}</small>` : '';
+                    cBackText = formatClozePreview(escapeHtml(c.front), true) + bText;
                 }
 
                 html += `
@@ -663,7 +644,7 @@
                             <div class="card-face card-back">
                                 <div class="card-content-wrapper">
                                     <div class="card-text" style="color:var(--success)">
-                                        ${c.type === 'cloze' ? formatClozePreview(escapeHtml(c.front)) + bText : bText}
+                                        ${c.type === 'cloze' ? cBackText : bText}
                                     </div>
                                 </div>
                             </div>
@@ -690,7 +671,7 @@
         }
 
         /* ==========================================================================
-           7. MODALS: DB MANAGER, PRESETS, BACKUP
+           8. MODALS: DB MANAGER, PRESETS, BACKUP
            ========================================================================== */
         function openDbManager(keepScroll = false) {
             const list = document.getElementById('db-list');
@@ -716,13 +697,17 @@
             const card = AppState.parsedCards[parsedIdx];
             if (!card || card.lineIdx === undefined) return;
             
-            const lines = document.getElementById('raw-input').value.split('\n');
+            const ta = document.getElementById('raw-input');
+            AppState.historyUndo = ta.value; 
+
+            const lines = ta.value.split('\n');
             lines.splice(card.lineIdx, 1);
-            document.getElementById('raw-input').value = lines.join('\n');
+            ta.value = lines.join('\n');
             
             handleInputCore();
-            openDbManager(true); // Re-render list accurately and preserve scroll
+            openDbManager(true); 
             doVibrate(15);
+            showToast("Карточка удалена", "info", true); 
         }
 
         function openPresetsManager() {
@@ -747,6 +732,8 @@
             const text = document.getElementById('raw-input').value.trim();
             if(!name || !text) return showToast("Имя или поле ввода пустое", "warning");
             
+            if (AppState.presetsDB[name] && !confirm(`Шаблон "${name}" уже существует. Перезаписать?`)) return;
+
             AppState.presetsDB[name] = { text: text, deck: document.getElementById('deck-name').value };
             safeStorageWrite('anki_presets', AppState.presetsDB);
             document.getElementById('preset-name').value = '';
@@ -777,13 +764,18 @@
             const draftValue = localStorage.getItem('anki_draft') || '';
             const data = { presets: AppState.presetsDB, draft: draftValue };
             const blob = new Blob([JSON.stringify(data, null, 2)], {type: "application/json"});
-            const link = document.createElement('a');
-            const url = URL.createObjectURL(blob);
-            link.href = url;
-            link.download = `AnkiPro_Backup_${new Date().toISOString().split('T')[0]}.json`;
-            link.click();
-            setTimeout(() => URL.revokeObjectURL(url), 5000);
-            showToast("Бэкап скачан", "success");
+            
+            const reader = new FileReader();
+            reader.onloadend = function() {
+                const link = document.createElement('a');
+                link.href = reader.result;
+                link.download = `AnkiPro_Backup_${new Date().toISOString().split('T')[0]}.json`;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                showToast("Бэкап скачан", "success");
+            };
+            reader.readAsDataURL(blob);
         }
 
         function importJson(e) {
@@ -802,21 +794,15 @@
                 } catch (err) { 
                     showToast("Ошибка файла", "error"); 
                 } finally {
-                    e.target.value = ''; // Защита от Input File Deadlock
+                    e.target.value = ''; 
                 }
             };
             reader.readAsText(file);
         }
 
         /* ==========================================================================
-           8. CORE: ANKI WEBASSEMBLY COMPILER (.APKG)
+           9. CORE: ANKI WEBASSEMBLY COMPILER (.APKG)
            ========================================================================== */
-        function saveDraft() {
-            safeStorageWrite('anki_draft', document.getElementById('raw-input').value);
-            safeStorageWrite('anki_deck', document.getElementById('deck-name').value);
-            safeStorageWrite('anki_tags', AppState.selectedTags);
-        }
-
         function loadDraft() {
             const draft = localStorage.getItem('anki_draft') || '';
             const deck = safeParse('anki_deck', null) || localStorage.getItem('anki_deck');
@@ -825,7 +811,6 @@
             if (deck) document.getElementById('deck-name').value = deck;
             if (draft) { document.getElementById('raw-input').value = draft; handleInputCore(); }
             
-            // Тихо применяем теги к UI без вызова лишних вибраций и сохранений
             AppState.selectedTags = tags; 
             tags.forEach(t => {
                 const el = Array.from(document.querySelectorAll('.chip')).find(chip => chip.innerText === `#${t}`);
@@ -844,25 +829,24 @@
         }
 
         async function compileAnkiDeck() {
-            if (AppState.isCompiling) return;
-            if (!AppState.SQL) return showToast("WASM не инициализирован", "error");
-            
             const validCards = AppState.parsedCards.filter(c => !c.error && c.type !== 'error');
             if (validCards.length === 0) return;
 
             AppState.isCompiling = true;
-
-            const rawDeckName = document.getElementById('deck-name').value.trim() || 'Инбокс';
-            const deckName = escapeAnki(rawDeckName); // Защита от \x1f инъекций в названии
+            let success = false;
 
             const btn = document.getElementById('btn-compile');
             btn.disabled = true;
             document.getElementById('compile-text').innerText = "Компиляция...";
             doVibrate(30);
 
+            await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+
             let db = null;
             try {
-                // Создаем in-memory базу
+                const rawDeckName = document.getElementById('deck-name').value.trim() || 'Инбокс';
+                const deckName = escapeAnki(rawDeckName); 
+
                 db = new AppState.SQL.Database();
                 
                 db.run(`
@@ -876,7 +860,6 @@
                 const basicMid = 1000; const clozeMid = 2000;
                 const tagsStr = AppState.selectedTags.length > 0 ? ` ${AppState.selectedTags.join(' ')} ` : "";
 
-                // Минимизированный JSON для схем Anki (Экономим RAM и место)
                 const modelsJson = {
                     "1000": { id: basicMid, name: "Pro Basic", type: 0, mod: nowSec, usn: -1, sortf: 0, did: deckId, tmpls: [{ name: "Card 1", ord: 0, qfmt: "<div class='c'>{{Front}}</div>", afmt: "<div class='c'>{{Front}}<hr>{{Back}}</div>", did: null }], flds: [{ name: "Front", ord: 0, sticky: false, rtl: false, font: "Arial", size: 20 }, { name: "Back", ord: 1, sticky: false, rtl: false, font: "Arial", size: 20 }], css: ".card { font-family: sans-serif; text-align: center; color: #c9d1d9; background: #0d1117; } .c { background: #161b22; padding: 20px; border-radius: 12px; border: 1px solid #30363d; margin: 10px; } hr { border: 0; border-top: 1px solid #30363d; margin: 15px 0; }", tags: [] },
                     "2000": { id: clozeMid, name: "Pro Cloze", type: 1, mod: nowSec, usn: -1, sortf: 0, did: deckId, tmpls: [{ name: "Cloze", ord: 0, qfmt: "<div class='c'>{{cloze:Text}}</div>", afmt: "<div class='c'>{{cloze:Text}}<hr>{{Back Extra}}</div>", did: null }], flds: [{ name: "Text", ord: 0, sticky: false, rtl: false, font: "Arial", size: 20 }, { name: "Back Extra", ord: 1, sticky: false, rtl: false, font: "Arial", size: 20 }], css: ".card { font-family: sans-serif; text-align: center; color: #c9d1d9; background: #0d1117; } .c { background: #161b22; padding: 20px; border-radius: 12px; border: 1px solid #30363d; margin: 10px; } hr { border: 0; border-top: 1px solid #30363d; margin: 15px 0; } .cloze { color: #58a6ff; font-weight: bold; }", tags: [] }
@@ -890,14 +873,13 @@
 
                 db.run(`INSERT INTO col VALUES (1, ${nowSec}, ${Date.now()}, ${Date.now()}, 11, ?, ?, ?, ?);`, [JSON.stringify(dconfJson), JSON.stringify(decksJson), JSON.stringify(modelsJson), JSON.stringify(confJson)]);
 
-                const baseTime = Date.now() * 1000; // Protection against ID collisions
+                const baseTime = Date.now() * 1000; 
                 
                 validCards.forEach((c, idx) => {
                     const noteId = baseTime + idx;
                     const cardId = noteId + 10000;
                     const guid = generateGuid();
                     
-                    // Безопасность: очистка фронта/бэка от спецсимволов Anki, чтобы не сломать SQLite
                     const cleanFront = escapeAnki(c.front);
                     const cleanBack = escapeAnki(c.back);
                     const flds = `${cleanFront}\x1f${cleanBack}`;
@@ -919,7 +901,6 @@
                     });
                 });
 
-                // Архивация JSZip
                 const binaryDb = db.export();
                 const zip = new JSZip();
                 zip.file("collection.anki2", binaryDb);
@@ -927,6 +908,13 @@
 
                 AppState.compiledBlob = await zip.generateAsync({ type: "blob" });
                 AppState.finalFilename = `${deckName.replace(/[^a-zA-Z0-9а-яА-Я_-]/g, '_')}.apkg`;
+                
+                AppState.compiledDataUrl = await new Promise((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onloadend = () => resolve(reader.result);
+                    reader.onerror = reject;
+                    reader.readAsDataURL(AppState.compiledBlob);
+                });
 
                 document.getElementById('compile-stats').innerText = `${(AppState.compiledBlob.size / 1024).toFixed(1)} KB`;
                 document.getElementById('compile-text').innerText = "⬇ Скачать .apkg";
@@ -935,52 +923,63 @@
                 showToast("Архив успешно скомпилирован!", "success");
                 if (typeof confetti === 'function') confetti({ particleCount: 100, spread: 70, origin: { y: 0.8 }, colors: ['#39d353', '#58a6ff'] });
                 
-                btn.onclick = () => downloadApkg(); // Меняем логику кнопки
+                success = true;
 
             } catch (err) {
                 console.error(err);
                 showToast('Ошибка компиляции SQLite', 'error');
             } finally {
-                // КРИТИЧЕСКИ ВАЖНО: Очищаем память C++ (WebAssembly) во избежание Memory Leak
                 if (db) db.free();
                 AppState.isCompiling = false;
                 btn.disabled = false;
+                
+                if (!success) {
+                    document.getElementById('compile-text').innerText = "Скомпилировать";
+                    AppState.compiledBlob = null;
+                    AppState.compiledDataUrl = null;
+                }
+
+                // Синхронизация: если юзер печатал во время компиляции, пересобираем UI
+                if (AppState.needsReparse) {
+                    AppState.needsReparse = false;
+                    handleInputCore();
+                }
             }
         }
 
         function downloadApkg() {
-            if (!AppState.compiledBlob) return;
-            const link = document.createElement('a');
-            const url = URL.createObjectURL(AppState.compiledBlob);
-            link.href = url;
-            link.download = AppState.finalFilename;
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
+            if (!AppState.compiledDataUrl || AppState.isDownloading) return;
+            AppState.isDownloading = true;
             
-            showToast("Скачивание началось...", "success");
-
-            // Защита от Memory Leak: Очищаем Blob из памяти с паузой на начало скачивания
-            setTimeout(() => URL.revokeObjectURL(url), 10000);
-            
-            // Сброс кнопки
-            const btn = document.getElementById('btn-compile');
-            btn.onclick = compileAnkiDeck;
-            document.getElementById('compile-text').innerText = "Скомпилировать";
-            doVibrate(20);
+            try {
+                const link = document.createElement('a');
+                link.href = AppState.compiledDataUrl;
+                link.download = AppState.finalFilename;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                
+                showToast("Скачивание началось!", "success");
+                doVibrate(20);
+            } catch (e) {
+                showToast("Ошибка при скачивании", "error");
+            } finally {
+                AppState.isDownloading = false;
+            }
         }
 
         async function shareApkg() {
             if (!AppState.compiledBlob) return;
             const file = new File([AppState.compiledBlob], AppState.finalFilename, { type: "application/octet-stream" });
             
-            // Безопасный вызов Share API
             if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
                 try {
                     await navigator.share({ files: [file], title: 'Anki Pro Deck', text: 'Сборка карточек готова.' });
                     doVibrate(30);
                 } catch (err) {
-                    if (err.name !== 'AbortError') showToast("Система Share отменила действие", "error");
+                    if (err.name !== 'AbortError') {
+                        showToast("Ошибка Share API", "error");
+                    }
                 }
             } else {
                 showToast("Ваш браузер не поддерживает Share File API", "warning");
